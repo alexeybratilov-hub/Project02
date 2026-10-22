@@ -22,25 +22,25 @@
 
 Стек утверждён (D-001), поэтому задачи детализированы.
 
-| ID | Задача | Статус | Критерий завершения |
-|---|---|---|---|
-| T1-01 | Создать структуру приложения `app/` (core, modules, templates, static) | planned | структура соответствует ARCHITECTURE §3, §13 |
-| T1-02 | Настроить конфигурацию (SAOT_DB_URL/HOST/PORT) и создание папок data/backups/logs | planned | приложение читает конфигурацию без кода с путями |
-| T1-03 | Реализовать подключение SQLAlchemy + SQLite WAL + PRAGMA foreign_keys | planned | данные сохраняются между перезапусками (тест) |
-| T1-04 | Инициализировать Alembic, базовая миграция схемы (legal_entities, departments, positions, справочники, contingent_records, contingent_medical_items, employees, employment_history, audit_log) | planned | `alembic upgrade head` проходит на чистой и повторной базе |
-| T1-05 | Реализовать FastAPI-каркас: обработка ошибок (русские сообщения, без стек-трейсов), корреляционный ID | planned | тест 404/валидации возвращает понятную ошибку |
-| T1-06 | Реестр модулей: регистрация, включение/отключение, зависимость от ядра | planned | отключение модуля не ломает запуск; тест |
-| T1-07 | Базовая навигация и стиль (Jinja2 layout, меню из реестра модулей) | planned | главная страница и пустые состояния отображаются |
-| T1-08 | Журналирование в logs/ и запись audit_log (create/update/archive/import) | planned | аудит пишется в транзакции изменения |
-| T1-09 | Резервное копирование sqlite backup API + манифест; восстановление с предварительной копией и проверкой целостности | planned | тест copy→modify→restore→данные соответствуют |
-| T1-10 | start.bat / stop.bat для portable-папки + инструкция Windows | planned | ручная проверка на целевой Windows (зафиксировать результат) |
-| T1-11 | pytest: инфраструктура (временная БД, TestClient) + тесты миграций, FK, аудита, бэкапа | planned | `pytest -q` зелёный, результаты в TESTING.md |
+| ID | Задача | Статус | Критерий завершения | Результат проверки |
+|---|---|---|---|---|
+| T1-01 | Создать структуру приложения `app/` (core, modules, templates, static) | done | структура соответствует ARCHITECTURE §3, §13 | создана: app/core, app/modules/_sample, app/templates, app/static, app/tests; `.gitignore` исключает runtime-папки (2026-10-22) |
+| T1-02 | Настроить конфигурацию (SAOT_DB_URL/HOST/PORT) и создание папок data/backups/logs | done | приложение читает конфигурацию без кода с путями | `app/core/config.py`: только env SAOT_*, `ensure_runtime_dirs()` создаёт data/backups/logs/attachments; тесты test_smoke |
+| T1-03 | Реализовать подключение SQLAlchemy + SQLite WAL + PRAGMA foreign_keys | done | данные сохраняются между перезапусками (тест) | `app/core/db.py`: event-listener WAL+foreign_keys на каждом подключении; сохранение между запусками проверено вручную (TESTING.md §5.2) и тестом FK |
+| T1-04 | Инициализировать Alembic, базовая миграция схемы (legal_entities, departments, positions, справочники, contingent_records, contingent_medical_items, employees, employment_history, audit_log) | done | `alembic upgrade head` проходит на чистой и повторной базе | миграция 0001_base_schema; тесты test_migrations (чистая база, повторный upgrade); автомиграция при запуске desktop-режима (SAOT_AUTO_MIGRATE) |
+| T1-05 | Реализовать FastAPI-каркас: обработка ошибок (русские сообщения, без стек-трейсов), корреляционный ID | done | тест 404/валидации возвращает понятную ошибку | `app/core/errors.py` install_error_handling; тесты 404 — русские сообщения без стек-трейсов (test_smoke) |
+| T1-06 | Реестр модулей: регистрация, включение/отключение, зависимость от ядра | done | отключение модуля не ломает запуск; тест | `app/core/module_registry.py` + демо-модуль `_sample`; состояния сохраняются в таблице module_registry и загружаются при старте; тесты test_core, test_stage1_acceptance; ручная проверка выключения между запусками (TESTING.md §5.2) |
+| T1-07 | Базовая навигация и стиль (Jinja2 layout, меню из реестра модулей) | done | главная страница и пустые состояния отображаются | base.html/index.html + /static/style.css; меню строится из registry.enabled(); тесты test_smoke, test_stage1_acceptance (/, /static/style.css) |
+| T1-08 | Журналирование в logs/ и запись audit_log (create/update/archive/import) | done | аудит пишется в транзакции изменения | `setup_logging()` → logs/saot.log (rotating); add_audit — в транзакции вызывающего (тесты create/rollback); write_audit — служебные операции (restore) |
+| T1-09 | Резервное копирование sqlite backup API + манифест; восстановление с предварительной копией и проверкой целостности | done | тест copy→modify→restore→данные соответствуют | `app/core/backup.py`: sqlite3 backup API, манифест JSON, integrity_check до/после, страховочная копия перед restore, аудит restore; тесты test_backup, test_stage1_acceptance |
+| T1-10 | start.bat / stop.bat для portable-папки + инструкция Windows | blocked | ручная проверка на целевой Windows (зафиксировать результат) | скрипты `start.bat`/`stop.bat` созданы; **ручная проверка на целевой Windows не выполнена** — в среде разработки нет Windows. Точка продолжения: прогнать start.bat на Windows-машине и зафиксировать результат здесь |
+| T1-11 | pytest: инфраструктура (временная БД, TestClient) + тесты миграций, FK, аудита, бэкапа | done | `pytest -q` зелёный, результаты в TESTING.md | conftest: изолированная tmp_path-база со схемой Alembic + TestClient; 20 тестов, `python -m pytest` → **20 passed in 1.62s** (2026-10-22), результаты в TESTING.md §5.1 |
 
 ## Этапы 2–5
 
 Задачи детализируются при переходе к этапу. Общие группы:
 
-- T2 — юридические лица и главная страница;
+- T2 — юридические лица и главная страница (следующий этап);
 - T3 — контингент;
 - T4 — работники;
 - T5 — стабилизация, резервное копирование, тесты, документация.
