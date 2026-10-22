@@ -10,14 +10,18 @@
   <header>
     <a class="brand" href="/">САОТ</a>
     <nav>
-      {% for m in modules or [] %}
+      <a href="/legal-entities/">Юридические лица</a>
+      {% for m in modules or [] %}{% if m.module_id != 'legal_entities' %}
       <a href="{{ m.navigation_items[0].href if m.navigation_items else '/' }}">{{ m.title }}</a>
-      {% endfor %}
+      {% endif %}{% endfor %}
     </nav>
+    <span class="current-le">
+      {% if current_legal_entity %}Текущее: {{ current_legal_entity.short_name or current_legal_entity.full_name }}{% else %}Юридическое лицо не выбрано{% endif %}
+    </span>
   </header>
   <main>
     {% block content %}{% endblock %}
   </main>
-  <footer>Этап 1 — техническое ядро. Данные хранятся локально.</footer>
+  <footer>Этап 2 — юридические лица. Данные хранятся локально.</footer>
 </body>
 </html>

@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 0.2.0-stage1 — 2026-10-22 (этап 1 завершён, кроме ручной проверки Windows)
+
+- **Этап:** 1 — техническое ядро.
+- **Добавлено:** структура `app/` (core/modules/templates/static/tests); конфигурация только через SAOT_* c автосозданием data/backups/logs/attachments (T1-01/T1-02); модели SQLAlchemy всех сущностей DATA_MODEL, SQLite WAL + PRAGMA foreign_keys (T1-03); Alembic + базовая миграция `0001_base_schema`, автомиграция при desktop-запуске (T1-04); FastAPI-каркас с русской обработкой ошибок без стек-трейсов (T1-05); реестр модулей с persist состояний в таблице module_registry и демо-модуль `_sample` (T1-06); базовая навигация Jinja2 + /static/style.css (T1-07); логирование в logs/saot.log и audit_log в транзакции изменения + write_audit для служебных операций (T1-08); backup/restore через sqlite3 backup API с манифестом, integrity_check, страховочной копией и аудитом restore (T1-09); `start.bat`/`stop.bat` (T1-10, код); pytest-инфраструктура и 20 тестов, включая приёмочные `test_stage1_acceptance.py` (T1-11).
+- **Изменения структуры данных:** схема v1 создана миграцией 0001 (legal_entities, departments, positions, справочники, contingent_records, contingent_medical_items, employees, employment_history, audit_log, module_registry).
+- **Результаты тестирования:** `python -m pytest` → 20 passed in 1.62s (TESTING.md §5.1); ручная проверка трёх последовательных запусков с сохранением данных и состояний модулей — пройдена (TESTING.md §5.2).
+- **Документация:** TASKS (этап 1: done/blocked с результатами), TESTING (§1, §3, §4, §5, §7), ROADMAP (статус этапа 1), PROJECT_CONTEXT, HANDOFF, README приведены к фактическому состоянию.
+- **Известные ограничения:** ручная проверка `start.bat` на целевой Windows не выполнена (нет доступа к Windows) — T1-10 помечен blocked с точкой продолжения; корреляционный ID запросов — минимальная реализация; UI-тесты браузера отсутствуют.
+
 ## 0.1.0-stage0 — 2026-10-22 (этап 0 завершён)
 
 - **Этап:** 0 — анализ требований и проектирование.
