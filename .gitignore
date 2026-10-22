@@ -1,0 +1,25 @@
+# Рабочие данные и артефакты — не коммитить (см. README, SECURITY.md)
+data/
+attachments/
+backups/
+logs/
+runtime/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# ОС и редакторы
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

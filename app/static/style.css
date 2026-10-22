@@ -1,0 +1,12 @@
+/* Единый стиль интерфейса САОТ (T1-07) */
+:root { --accent: #1a5fb4; --bg: #f6f8fa; --text: #22272e; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); }
+header { display: flex; align-items: center; gap: 1rem; background: var(--accent); color: #fff; padding: .6rem 1.2rem; }
+header .brand { color: #fff; font-weight: 700; text-decoration: none; font-size: 1.15rem; }
+header nav a { color: #dbe9ff; margin-right: .8rem; text-decoration: none; }
+header nav a:hover { color: #fff; text-decoration: underline; }
+main { max-width: 960px; margin: 1.5rem auto; padding: 0 1rem; }
+footer { text-align: center; color: #6b7280; font-size: .85rem; padding: 1.5rem 0; }
+.empty { color: #6b7280; font-style: italic; }
+h1 { font-size: 1.5rem; }

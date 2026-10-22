@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}САОТ{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">САОТ</a>
+    <nav>
+      {% for m in modules or [] %}
+      <a href="{{ m.navigation_items[0].href if m.navigation_items else '/' }}">{{ m.title }}</a>
+      {% endfor %}
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>Этап 1 — техническое ядро. Данные хранятся локально.</footer>
+</body>
+</html>
