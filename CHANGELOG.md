@@ -7,7 +7,7 @@
 - **Изменения структуры данных:** модель данных уточнена без изменения перечня сущностей v1 (positions — глобальный справочник + normalized_name; contingent_records — идентификация по D-004 без unique-ограничения; employees.contingent_record_id — без автоматической привязки).
 - **Миграции:** нет (Alembic инициализируется на этапе 1).
 - **Результаты тестирования:** установка и импорт всех зависимостей утверждённого стека в Python 3.12.10 — успешно (TESTING.md §5). Тестов приложения нет: код не создавался.
-- **Документация:** DECISIONS, ARCHITECTURE, DATA_MODEL, IMPORT_EXPORT, ROADMAP, TASKS, PROJECT_CONTEXT, HANDOFF, README, TESTING обновлены по фактическому состоянию.
+- **Документация:** DECISIONS, ARCHITECTURE, DATA_MODEL, IMPORT_EXPORT, ROADMAP, TASKS, PROJECT_CONTEXT, HANDOFF, README, TESTING обновлены по фактическому состоянию. Исправлена нумерация разделов в TESTING.md (было два §5); из README.md устранено оставшееся противоречие «стек, СУБД и упаковка не утверждены», структура папки приведена в соответствие с ARCHITECTURE §13.
 - **Известные ограничения:** приложение не реализовано; проверка portable-упаковки на целевой Windows перенесена в этап 1 (T1-10).
 
 ## 0.0.0-docs
