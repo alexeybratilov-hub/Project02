@@ -7,6 +7,7 @@ SQLite: WAL-режим и PRAGMA foreign_keys=ON на каждом подклю�
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
@@ -50,6 +51,19 @@ def init_db() -> None:
 
 def get_session() -> Iterator[Session]:
     """Зависимость FastAPI: сессия на время обработки запроса."""
+    if _session_factory is None:
+        get_engine()
+    assert _session_factory is not None
+    session = _session_factory()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@contextmanager
+def get_session_ctx() -> Iterator[Session]:
+    """Сессия вне HTTP-контекста (ядро, служебные операции, тесты)."""
     if _session_factory is None:
         get_engine()
     assert _session_factory is not None
