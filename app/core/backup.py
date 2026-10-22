@@ -109,4 +109,15 @@ def restore_backup(backup_path: Path, *, make_safety_copy: bool = True) -> Path:
             raise RuntimeError(f"Восстановленная база повреждена: {result}")
     finally:
         con.close()
+
+    # Аудит значимой операции (T1-08): восстановление из копии.
+    from app.core.audit import write_audit
+
+    write_audit(
+        entity_type="database",
+        entity_id=str(dst_path.name),
+        action="restore",
+        after={"backup": str(backup_path), "safety_copy": str(safety)},
+        comment="Восстановление из резервной копии",
+    )
     return safety

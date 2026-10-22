@@ -37,11 +37,58 @@ class ModuleRegistry:
     def register(self, info: ModuleInfo) -> None:
         self._modules[info.module_id] = info
 
-    def disable(self, module_id: str) -> None:
+    def disable(self, module_id: str, *, persist: bool = False) -> None:
         self._disabled.add(module_id)
+        if persist:
+            self._persist_state(module_id, enabled=False)
 
-    def enable(self, module_id: str) -> None:
+    def enable(self, module_id: str, *, persist: bool = False) -> None:
         self._disabled.discard(module_id)
+        if persist:
+            self._persist_state(module_id, enabled=True)
+
+    def _persist_state(self, module_id: str, *, enabled: bool) -> None:
+        """Сохранить состояние модуля в таблице module_registry (DATA_MODEL §1.11).
+
+        Ошибки БД не должны ломать работу приложения — только запись в лог.
+        """
+        import logging
+
+        try:
+            from app.core import db
+            from app.core.models import ModuleRegistry as ModuleRegistryRow
+
+            with db.get_session_ctx() as session:
+                row = session.get(ModuleRegistryRow, module_id)
+                if row is None:
+                    row = ModuleRegistryRow(module_id=module_id, enabled=int(enabled))
+                    session.add(row)
+                else:
+                    row.enabled = int(enabled)
+                session.commit()
+        except Exception:  # noqa: BLE001 — состояние вторично, запуск не прерывать
+            logging.getLogger("saot.modules").exception(
+                "Не удалось сохранить состояние модуля %s", module_id
+            )
+
+    def load_states_from_db(self) -> None:
+        """Применить сохранённые состояния (вызывается после discover_modules)."""
+        import logging
+
+        log = logging.getLogger("saot.modules")
+        try:
+            from app.core import db
+            from app.core.models import ModuleRegistry as ModuleRegistryRow
+
+            with db.get_session_ctx() as session:
+                for row in session.query(ModuleRegistryRow).all():
+                    if row.enabled:
+                        self.enable(row.module_id)
+                    else:
+                        self.disable(row.module_id)
+                        log.info("Модуль %s отключён из сохранённого состояния", row.module_id)
+        except Exception:  # noqa: BLE001 — при недоступной таблице используем значения по умолчанию
+            log.exception("Не удалось загрузить состояния модулей из БД")
 
     def is_enabled(self, module_id: str) -> bool:
         return module_id in self._modules and module_id not in self._disabled

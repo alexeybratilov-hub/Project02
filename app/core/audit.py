@@ -67,3 +67,30 @@ def add_audit(
     )
     session.add(entry)
     return entry
+
+
+def write_audit(
+    *,
+    entity_type: str,
+    entity_id: str,
+    action: str,
+    before=None,
+    after=None,
+    actor: str = "system",
+    comment: str | None = None,
+) -> None:
+    """Записать аудит в собственной транзакции (служебные операции ядра: backup/restore)."""
+    from app.core import db
+
+    with db.get_session_ctx() as session:
+        add_audit(
+            session,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            action=action,
+            before=before,
+            after=after,
+            actor=actor,
+            comment=comment,
+        )
+        session.commit()
