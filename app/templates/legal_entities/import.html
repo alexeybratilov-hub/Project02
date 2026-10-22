@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Импорт юридических лиц — САОТ{% endblock %}
+{% block content %}
+<p><a href="/legal-entities/">← К списку юридических лиц</a></p>
+<h1>Импорт юридических лиц из Excel</h1>
+<p>1. Скачайте <a href="/legal-entities/import/template">шаблон</a>, заполните его
+(обязательный столбец — «Полное наименование»). Идентификация: ИНН+КПП, затем ОГРН.</p>
+<p>2. Загрузите файл — увидите предпросмотр с ошибками и предупреждениями.
+3. Подтвердите импорт — сохранение выполняется одной транзакцией; при отмене данные не изменяются.</p>
+
+<form method="post" action="/legal-entities/import" enctype="multipart/form-data">
+  <div class="form-row">
+    <label for="file">Файл .xlsx</label>
+    <input id="file" name="file" type="file" accept=".xlsx" required>
+  </div>
+  <div class="form-row">
+    <label for="mode">Режим совпадений</label>
+    <select id="mode" name="mode">
+      <option value="add">Пропускать дубликаты</option>
+      <option value="update">Обновлять после идентификации</option>
+    </select>
+  </div>
+  <button class="btn" type="submit">Проверить и показать предпросмотр</button>
+</form>
+
+{% if preview %}
+<h2>Предпросмотр</h2>
+{% if preview.structure_errors %}
+<div class="alert">{% for e in preview.structure_errors %}<p>{{ e }}</p>{% endfor %}</div>
+{% endif %}
+{% if report %}
+<div class="ok"><p>Импорт завершён: добавлено — {{ report.added }}, обновлено — {{ report.updated }},
+пропущено — {{ report.skipped }}, отклонено — {{ report.rejected }}.</p></div>
+{% elif preview.results %}
+<table>
+  <thead><tr><th>Строка</th><th>Наименование</th><th>Действие</th><th>Ошибки / предупреждения / изменения</th></tr></thead>
+  <tbody>
+    {% for r in preview.results %}
+    <tr>
+      <td>{{ r.row }}</td>
+      <td>{{ r.name }}</td>
+      <td>{{ {'add':'добавить','update':'обновить','skip':'пропустить','reject':'отклонить'}[r.action] }}</td>
+      <td>
+        {% for e in r.errors %}<p class="err">{{ e }}</p>{% endfor %}
+        {% for w in r.warnings %}<p class="warn">{{ w }}</p>{% endfor %}
+        {% for c in r.changes %}<p>{{ c }}</p>{% endfor %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p>Итог: будет добавлено — {{ preview.summary.add }}, обновлено — {{ preview.summary.update }},
+пропущено — {{ preview.summary.skip }}, отклонено — {{ preview.summary.reject }}.</p>
+{% if token %}
+<form method="post" action="/legal-entities/import/confirm">
+  <input type="hidden" name="token" value="{{ token }}">
+  <button class="btn" type="submit" {% if preview.has_blocking_errors %}disabled{% endif %}>Подтвердить импорт</button>
+</form>
+<p><a href="/legal-entities/import">Отменить (данные не сохранятся)</a></p>
+{% endif %}
+{% endif %}
+{% endif %}
+{% endblock %}

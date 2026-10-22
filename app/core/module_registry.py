@@ -27,6 +27,7 @@ class ModuleInfo:
     requires_core: list[str] = field(default_factory=list)
     router_factory: object | None = None  # callable() -> fastapi.APIRouter
     navigation_items: list[dict] = field(default_factory=list)
+    widgets: list = field(default_factory=list)  # callable(session) -> dict (ARCHITECTURE §4)
 
 
 class ModuleRegistry:

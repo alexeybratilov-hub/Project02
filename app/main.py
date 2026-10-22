@@ -71,8 +71,24 @@ def create_app() -> FastAPI:
 
     @app.get("/", response_class=None)
     async def index(request: Request):
+        # Главная панель: виджеты включённых модулей — только фактические показатели (T2-08).
+        from app.core import db
+
+        widget_values = []
+        try:
+            with db.get_session_ctx() as session:
+                for info in registry.enabled():
+                    for widget in info.widgets:
+                        try:
+                            widget_values.append(widget(session))
+                        except Exception:  # noqa: BLE001 — отказ виджета не ронняет главную
+                            logging.getLogger("saot.dashboard").exception(
+                                "Виджет модуля %s не построен", info.module_id
+                            )
+        except Exception:  # noqa: BLE001 — при недоступной БД показываем пустые состояния
+            logging.getLogger("saot.dashboard").exception("Не удалось построить виджеты")
         return templates.TemplateResponse(
-            request, "index.html", {"modules": registry.enabled()}
+            request, "index.html", {"modules": registry.enabled(), "widgets": widget_values}
         )
 
     @app.get("/health")
