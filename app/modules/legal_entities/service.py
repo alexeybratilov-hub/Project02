@@ -78,6 +78,16 @@ def _norm(value: Any) -> str | None:
     return text or None
 
 
+def _ci(value: Any) -> str:
+    """Нормализация для регистронезависимого сравнения.
+
+    SQLite lower()/upper() не работают с кириллицей (ASCII-only), поэтому
+    приведение регистра выполняется на стороне Python и применяется к обеим
+    сторонам сравнения (см. DATA_MODEL §1.1, FR-02).
+    """
+    return (value or "").casefold().replace("\u0401", "\u0435")  # Ё/е → е
+
+
 def validate_inn(value: str | None) -> str | None:
     if value is None:
         return None
@@ -165,9 +175,11 @@ def find_duplicates(
         dup = session.execute(base.where(LegalEntity.inn == inn)).scalars().first()
         if dup:
             warnings.append(f"В базе уже есть юридическое лицо с таким ИНН: «{dup.full_name}».")
-    name_dup = session.execute(
-        base.where(func.lower(func.trim(LegalEntity.full_name)) == full_name.strip().lower())
-    ).scalars().first()
+    target = _ci(full_name.strip())
+    name_dup = next(
+        (row for row in session.execute(base).scalars() if _ci((row.full_name or "").strip()) == target),
+        None,
+    )
     if name_dup:
         warnings.append("Похожее полное наименование уже существует — возможен дубликат.")
     return conflict, warnings
@@ -302,6 +314,20 @@ def _like_pattern(term: str) -> str:
     return f"%{escaped}%"
 
 
+def _filtered_active(session: Session, conds: list):
+    """Записи по SQL-условиям; регистронезависимый фильтр по тексту — на Python
+    (SQLite lower() не работает с кириллицей)."""
+    return session.execute(select(LegalEntity).where(*conds)).scalars().all()
+
+
+def _matches(le: LegalEntity, term_lower: str) -> bool:
+    hay = (
+        _ci(le.full_name),
+        _ci(le.short_name or ""),
+    )
+    return any(term_lower in h for h in hay)
+
+
 def list_legal_entities(
     session: Session,
     *,
@@ -313,14 +339,19 @@ def list_legal_entities(
     conds = [LegalEntity.status == status]
     term = (search or "").strip()
     if term:
-        like = _like_pattern(term.lower())
-        conds.append(
-            or_(
-                func.lower(LegalEntity.full_name).like(like, escape="\\"),
-                func.lower(func.coalesce(LegalEntity.short_name, "")).like(like, escape="\\"),
-                func.coalesce(LegalEntity.inn, "").like(_like_pattern(term), escape="\\"),
-            )
-        )
+        # Числовой/латинский фрагмент — по ИНН через SQL; текстовый — по
+        # наименованиям на Python (SQLite lower() не понимает кириллицу).
+        numeric = bool(re.fullmatch(r"\d+", term))
+        if numeric:
+            conds.append(LegalEntity.inn.like(_like_pattern(term), escape="\\"))
+        rows = list(_filtered_active(session, conds))
+        if not numeric:
+            needle = _ci(term)
+            rows = [r for r in rows if _matches(r, needle)]
+        rows.sort(key=lambda r: _ci(r.full_name))
+        total = len(rows)
+        start = (max(page, 1) - 1) * page_size
+        return rows[start : start + page_size], total
     total = int(session.scalar(select(func.count()).select_from(LegalEntity).where(*conds)) or 0)
     rows = (
         session.execute(
@@ -483,12 +514,17 @@ def preview_import(session: Session, records: list[dict], *, mode: str = "add") 
                 chk = checksum_warning(rec.get("inn"))
                 if chk:
                     r.warnings.append(chk)
-                name_dup = session.execute(
-                    select(LegalEntity).where(
-                        LegalEntity.status == ACTIVE,
-                        func.lower(func.trim(LegalEntity.full_name)) == rec["full_name"].strip().lower(),
-                    )
-                ).scalars().first()
+                target_name = _ci(rec["full_name"].strip())
+                name_dup = next(
+                    (
+                        row
+                        for row in session.execute(
+                            select(LegalEntity).where(LegalEntity.status == ACTIVE)
+                        ).scalars()
+                        if _ci((row.full_name or "").strip()) == target_name
+                    ),
+                    None,
+                )
                 if name_dup:
                     r.warnings.append("Такое полное наименование уже существует — возможен дубликат.")
         results.append(r)
@@ -573,9 +609,13 @@ def export_rows(
         query = select(LegalEntity).where(LegalEntity.status == status)
         term = (search or "").strip()
         if term:
-            query = query.where(
-                func.lower(LegalEntity.full_name).like(_like_pattern(term.lower()), escape="\\")
-            )
+            # тот же регистронезависимый фильтр, что и в списке (TESTING.md сценарий 14)
+            rows = list_legal_entities(session, search=term, status=status, page_size=10**9)
+            return [
+                [r.full_name, r.short_name, r.inn, r.kpp, r.ogrn,
+                 r.legal_address, r.actual_address, r.extra_info]
+                for r in rows[0]
+            ]
     rows = session.execute(query.order_by(LegalEntity.full_name)).scalars().all()
     return [
         [r.full_name, r.short_name, r.inn, r.kpp, r.ogrn,
