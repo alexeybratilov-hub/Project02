@@ -1,0 +1,478 @@
+/* Единый стиль интерфейса САОТ (T1-07, T2-05) */
+:root {
+  --accent: #1a5fb4;
+  --accent-hover: #165199;
+  --bg: #f6f8fa;
+  --text: #22272e;
+  --border: #d0d7de;
+  --card-bg: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+/* Шапка приложения */
+header {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  background: var(--accent);
+  color: #fff;
+  padding: 0.65rem 1.5rem;
+  position: relative;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+header .brand {
+  color: #fff;
+  font-weight: 700;
+  text-decoration: none;
+  font-size: 1.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+header nav {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+header nav a, header nav button {
+  color: #dbe9ff;
+  text-decoration: none;
+  background: transparent;
+  border: 0;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.95rem;
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+header nav a:hover, header nav button:hover,
+header nav a.active, header nav button.active {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.15);
+  text-decoration: none;
+}
+
+.current-le {
+  margin-left: auto;
+  font-size: 0.88rem;
+  color: #dbe9ff;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.current-le strong {
+  color: #ffffff;
+}
+
+/* Основной контейнер */
+main {
+  max-width: 1040px;
+  margin: 1.5rem auto;
+  padding: 0 1.25rem;
+  min-height: calc(100vh - 140px);
+}
+
+footer {
+  text-align: center;
+  color: #6b7280;
+  font-size: 0.85rem;
+  padding: 2rem 0 1.5rem;
+  border-top: 1px solid #e1e4e8;
+  margin-top: 3rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  color: #1a1f26;
+}
+
+h2 {
+  font-size: 1.25rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+/* Таблицы */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  background: #fff;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+th, td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  font-size: 0.92rem;
+}
+
+thead th {
+  background: #eef3f8;
+  font-weight: 600;
+  color: #24292f;
+}
+
+table.detail {
+  margin-bottom: 1.25rem;
+}
+
+table.detail th {
+  width: 240px;
+  background: #eef3f8;
+  font-weight: 600;
+  color: #333;
+}
+
+/* Кнопки и формы */
+button {
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 4px;
+  padding: 0.4rem 0.8rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: background 0.15s ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.secondary, .btn.secondary {
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #d1d5db;
+}
+
+button.secondary:hover:not(:disabled), .btn.secondary:hover {
+  background: #e5e7eb;
+}
+
+button.danger {
+  background: #dc2626;
+}
+
+button.danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.btn {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  padding: 0.45rem 0.9rem;
+  border-radius: 4px;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  border: 0;
+  cursor: pointer;
+  text-align: center;
+}
+
+.btn:hover {
+  background: var(--accent-hover);
+  color: #fff;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin: 1rem 0;
+  flex-wrap: wrap;
+}
+
+.toolbar a, .toolbar button {
+  text-decoration: none;
+}
+
+.toolbar .link-action {
+  color: var(--accent);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.92rem;
+  text-decoration: underline;
+}
+
+.toolbar .link-action:hover {
+  color: var(--accent-hover);
+}
+
+/* Фильтры и формы */
+.filters {
+  margin: 1rem 0;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.filters input[type="text"] {
+  padding: 0.45rem 0.65rem;
+  width: 340px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.92rem;
+}
+
+.filters input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(26, 95, 180, 0.2);
+}
+
+.form-row {
+  margin: 0.75rem 0;
+  display: flex;
+  flex-direction: column;
+  max-width: 640px;
+}
+
+.form-row label {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  font-size: 0.92rem;
+  color: #24292f;
+}
+
+.form-row input, .form-row textarea, .form-row select {
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.92rem;
+  background: #ffffff;
+}
+
+.form-row input:focus, .form-row textarea:focus, .form-row select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(26, 95, 180, 0.2);
+}
+
+/* Сообщения и бейджи */
+.alert {
+  background: #ffe9e9;
+  border: 1px solid #e0a0a0;
+  border-radius: 4px;
+  padding: 0.6rem 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.alert p {
+  margin: 0.2rem 0;
+  color: #a31515;
+  font-size: 0.92rem;
+}
+
+.ok {
+  background: #e6ffed;
+  border: 1px solid #7cc88e;
+  border-radius: 4px;
+  padding: 0.6rem 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.ok p {
+  margin: 0.2rem 0;
+  color: #137333;
+  font-size: 0.92rem;
+}
+
+.err {
+  color: #b3261e;
+  margin: 0.2rem 0;
+  font-size: 0.88rem;
+}
+
+.warn {
+  color: #9a6700;
+  margin: 0.2rem 0;
+  font-size: 0.88rem;
+}
+
+.badge {
+  display: inline-block;
+  background: #dbe9ff;
+  color: var(--accent);
+  border-radius: 12px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.badge.warn {
+  background: #fff3cd;
+  color: #9a6700;
+}
+
+.badge.ok {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.muted {
+  color: #6b7280;
+  font-size: 0.85rem;
+}
+
+.empty {
+  color: #6b7280;
+  font-style: italic;
+  padding: 1.5rem;
+  background: #fff;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  text-align: center;
+}
+
+/* Виджеты главной страницы */
+.widgets {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  margin: 1.5rem 0;
+}
+
+.widget {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.25rem 1.4rem;
+  min-width: 240px;
+  flex: 1;
+  text-decoration: none;
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  cursor: pointer;
+}
+
+.widget:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.08);
+}
+
+.widget .value {
+  font-size: 2.2rem;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.1;
+  margin-bottom: 0.3rem;
+}
+
+.widget .title {
+  font-weight: 600;
+  font-size: 1.05rem;
+  margin-bottom: 0.25rem;
+}
+
+.widget .caption {
+  color: #6b7280;
+  font-size: 0.85rem;
+}
+
+/* Действия в строках таблицы */
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.table-actions button, .table-actions a {
+  font-size: 0.85rem;
+  padding: 0.25rem 0.55rem;
+}
+
+.btn-sm {
+  font-size: 0.85rem;
+  padding: 0.25rem 0.55rem;
+}
+
+.btn-secondary {
+  background: #fff;
+  color: #374151;
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.btn-danger-outline {
+  background: #fff;
+  color: #dc2626;
+  border: 1px solid #fca5a5;
+}
+
+.btn-danger-outline:hover {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+/* Модули */
+.module-list {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0;
+}
+
+.module-item {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 0.75rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.module-info h3 {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+}
+
+.module-info p {
+  margin: 0;
+  color: #4b5563;
+  font-size: 0.9rem;
+}

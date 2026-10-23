@@ -1,0 +1,171 @@
+import React, { useState, useEffect } from 'react';
+import { Header } from './components/Header';
+import { Footer } from './components/Footer';
+import { Dashboard } from './components/Dashboard';
+import { LegalEntitiesList } from './components/LegalEntitiesList';
+import { LegalEntityCard } from './components/LegalEntityCard';
+import { LegalEntityForm } from './components/LegalEntityForm';
+import { LegalEntitiesImport } from './components/LegalEntitiesImport';
+import { ContingentList } from './components/ContingentList';
+import { ContingentCard } from './components/ContingentCard';
+import { ContingentForm } from './components/ContingentForm';
+import { ContingentImport } from './components/ContingentImport';
+import { DictionariesView } from './components/DictionariesView';
+import { AuditLogView } from './components/AuditLogView';
+import { BackupView } from './components/BackupView';
+import { ModulesView } from './components/ModulesView';
+import { storage } from './services/storage';
+import { LegalEntity } from './types';
+
+export const App: React.FC = () => {
+  const [currentView, setCurrentView] = useState<string>('home');
+  const [targetId, setTargetId] = useState<string | undefined>(undefined);
+  const [currentLe, setCurrentLe] = useState<LegalEntity | null>(null);
+
+  const refreshCurrentLe = () => {
+    setCurrentLe(storage.getCurrentLegalEntity());
+  };
+
+  useEffect(() => {
+    refreshCurrentLe();
+
+    const hash = window.location.hash.replace('#', '');
+    if (hash) {
+      if (hash.startsWith('legal-entities/')) {
+        const id = hash.replace('legal-entities/', '');
+        setCurrentView('legal-entities-view');
+        setTargetId(id);
+      } else if (hash.startsWith('contingent/')) {
+        const id = hash.replace('contingent/', '');
+        setCurrentView('contingent-view');
+        setTargetId(id);
+      } else if (hash === 'legal-entities') {
+        setCurrentView('legal-entities');
+      } else if (hash === 'contingent') {
+        setCurrentView('contingent');
+      } else if (hash === 'dictionaries') {
+        setCurrentView('dictionaries');
+      } else if (hash === 'modules') {
+        setCurrentView('modules');
+      } else if (hash === 'backup') {
+        setCurrentView('backup');
+      } else if (hash === 'audit') {
+        setCurrentView('audit');
+      }
+    }
+  }, []);
+
+  const handleNavigate = (view: string, id?: string) => {
+    setCurrentView(view);
+    setTargetId(id);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    if (view === 'legal-entities-view' && id) {
+      window.location.hash = `legal-entities/${id}`;
+    } else if (view === 'contingent-view' && id) {
+      window.location.hash = `contingent/${id}`;
+    } else if (view === 'home') {
+      window.location.hash = '';
+    } else {
+      window.location.hash = view;
+    }
+  };
+
+  const handleClearCurrentLe = () => {
+    storage.setCurrentLegalEntityId(null);
+    refreshCurrentLe();
+  };
+
+  return (
+    <div>
+      <Header
+        currentView={currentView}
+        onNavigate={handleNavigate}
+        currentLe={currentLe}
+        onClearCurrentLe={handleClearCurrentLe}
+      />
+
+      <main>
+        {currentView === 'home' && <Dashboard onNavigate={handleNavigate} />}
+
+        {/* Legal Entities */}
+        {currentView === 'legal-entities' && (
+          <LegalEntitiesList
+            onNavigate={handleNavigate}
+            onRefreshCurrentLe={refreshCurrentLe}
+          />
+        )}
+
+        {currentView === 'legal-entities-new' && (
+          <LegalEntityForm
+            onNavigate={handleNavigate}
+            onRefreshCurrentLe={refreshCurrentLe}
+          />
+        )}
+
+        {currentView === 'legal-entities-edit' && (
+          <LegalEntityForm
+            id={targetId}
+            onNavigate={handleNavigate}
+            onRefreshCurrentLe={refreshCurrentLe}
+          />
+        )}
+
+        {currentView === 'legal-entities-view' && targetId && (
+          <LegalEntityCard
+            id={targetId}
+            onNavigate={handleNavigate}
+            onRefreshCurrentLe={refreshCurrentLe}
+          />
+        )}
+
+        {currentView === 'legal-entities-import' && (
+          <LegalEntitiesImport
+            onNavigate={handleNavigate}
+            onRefreshCurrentLe={refreshCurrentLe}
+          />
+        )}
+
+        {/* Contingent */}
+        {currentView === 'contingent' && (
+          <ContingentList
+            onNavigate={handleNavigate}
+            filterLeId={targetId}
+          />
+        )}
+
+        {currentView === 'contingent-new' && (
+          <ContingentForm onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'contingent-edit' && (
+          <ContingentForm id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'contingent-view' && targetId && (
+          <ContingentCard id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'contingent-import' && (
+          <ContingentImport onNavigate={handleNavigate} />
+        )}
+
+        {/* Dictionaries */}
+        {currentView === 'dictionaries' && <DictionariesView />}
+
+        {/* System & Modules */}
+        {currentView === 'modules' && <ModulesView />}
+
+        {currentView === 'backup' && (
+          <BackupView onRefreshCurrentLe={refreshCurrentLe} />
+        )}
+
+        {currentView === 'audit' && <AuditLogView />}
+      </main>
+
+      <Footer />
+    </div>
+  );
+};
+
+export default App;

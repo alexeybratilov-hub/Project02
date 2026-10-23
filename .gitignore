@@ -1,9 +1,6 @@
-# Рабочие данные и артефакты — не коммитить (см. README, SECURITY.md)
-data/
-attachments/
-backups/
-logs/
-runtime/
+# Node / Vite
+node_modules/
+dist/
 
 # Python
 __pycache__/
