@@ -98,6 +98,20 @@ export interface Employee {
   updated_at: string;
 }
 
+// История кадровых перемещений работников (D-005, DATA_MODEL §1.12)
+export interface EmploymentHistoryRecord {
+  id: string;
+  employee_id: string;
+  start_date?: string | null;
+  end_date?: string | null; // NULL = текущий период
+  department_id?: string | null;
+  position_id?: string | null;
+  contingent_record_id?: string | null;
+  reason?: string | null;
+  comment?: string | null;
+  created_at: string;
+}
+
 export interface AuditLogItem {
   id: string;
   entity_type: string;
@@ -114,7 +128,14 @@ export interface AuditLogItem {
     | 'contingent_update'
     | 'contingent_archive'
     | 'contingent_restore'
-    | 'contingent_import';
+    | 'contingent_import'
+    | 'employee_create'
+    | 'employee_update'
+    | 'employee_archive'
+    | 'employee_restore'
+    | 'employee_import'
+    | 'employment_history_close'
+    | 'employment_history_open';
   changed_at: string;
   actor: string;
   before_data?: Record<string, any> | null;
@@ -190,6 +211,39 @@ export interface ContingentImportPreviewData {
   };
 }
 
+export interface EmployeeImportRowResult {
+  row: number;
+  action: 'add' | 'update' | 'skip' | 'reject';
+  title: string;
+  errors: string[];
+  warnings: string[];
+  changes: string[];
+  data: {
+    legal_entity_name: string;
+    department_name: string;
+    position_name: string;
+    last_name: string;
+    first_name: string;
+    middle_name?: string;
+    hire_date?: string;
+    birth_date?: string;
+    snils?: string;
+    contingent_label?: string;
+  };
+}
+
+export interface EmployeeImportPreviewData {
+  results: EmployeeImportRowResult[];
+  structure_errors: string[];
+  summary: {
+    total: number;
+    add: number;
+    update: number;
+    skip: number;
+    reject: number;
+  };
+}
+
 export interface BackupManifest {
   id: string;
   created_at: string;
@@ -200,6 +254,7 @@ export interface BackupManifest {
     positions: number;
     contingent: number;
     employees: number;
+    employment_history?: number;
     audit_logs: number;
   };
   data: {
@@ -208,6 +263,7 @@ export interface BackupManifest {
     positions: Position[];
     contingent: ContingentRecord[];
     employees: Employee[];
+    employment_history?: EmploymentHistoryRecord[];
     audit_logs: AuditLogItem[];
   };
 }

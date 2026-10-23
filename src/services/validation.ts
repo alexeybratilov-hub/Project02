@@ -116,3 +116,116 @@ export function findDuplicates(
 
   return { conflict, warnings };
 }
+
+// --- Employees (Этап 4, FR-07…FR-09, DATA_MODEL §1.7) ---
+
+export function normalizeSnils(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  // Хранение строкой по D-007: допускаются цифры с разделителями XXX-XXX-XXX YY
+  const digits = s.replace(/\D/g, '');
+  if (digits.length !== 11) {
+    throw new Error('СНИЛС должен содержать 11 цифр (формат XXX-XXX-XXX YY).');
+  }
+  // Контрольная сумма СНИЛС
+  const weights = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    sum += parseInt(digits[i], 10) * weights[i];
+  }
+  let control = sum % 11;
+  if (control === 10 || control === 11) {
+    control = 0;
+  }
+  if (control !== parseInt(digits[9], 10)) {
+    throw new Error('Контрольная сумма СНИЛС не сходится — проверьте значение.');
+  }
+  // Канонический вид XXX-XXX-XXX YY
+  return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6, 9)} ${digits[9]}${digits[10]}`;
+}
+
+export function validateDateNotFuture(value: string | null | undefined, fieldName: string): string | null {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  const d = new Date(s);
+  if (isNaN(d.getTime())) {
+    throw new Error(`Некорректная дата в поле «${fieldName}».`);
+  }
+  const now = new Date();
+  if (d.getTime() > now.getTime()) {
+    throw new Error(`Дата в поле «${fieldName}» не может быть в будущем.`);
+  }
+  return s;
+}
+
+export function findEmployeeDuplicates(
+  allEmployees: Array<{
+    id: string;
+    legal_entity_id: string;
+    last_name: string;
+    first_name: string;
+    middle_name?: string | null;
+    birth_date?: string | null;
+    snils?: string | null;
+    status: string;
+  }>,
+  data: {
+    legal_entity_id: string;
+    last_name: string;
+    first_name: string;
+    middle_name?: string | null;
+    birth_date?: string | null;
+    snils?: string | null;
+    exclude_id?: string | null;
+  }
+): { conflict: string | null; warnings: string[] } {
+  // Дубликаты НЕ объединяются автоматически (STAGE_4, IMPORT_EXPORT §5).
+  // Жёсткого конфликта нет: возможны внешние совместители и совпадения СНИЛС.
+  const warnings: string[] = [];
+  const active = allEmployees.filter(
+    e => e.status === 'active' && (!data.exclude_id || e.id !== data.exclude_id)
+  );
+
+  const snilsNorm = ciCompare(data.snils || '');
+  if (snilsNorm) {
+    const snilsDup = active.find(
+      e => e.legal_entity_id === data.legal_entity_id && ciCompare(e.snils || '') === snilsNorm
+    );
+    if (snilsDup) {
+      warnings.push(
+        `В этом юридическом лице уже есть работник с таким СНИЛС: ${snilsDup.last_name} ${snilsDup.first_name} (${formatFioShort(snilsDup)}). Возможен совместитель или дубликат.`
+      );
+    }
+  }
+
+  const fullNameKey = `${ciCompare(data.last_name)}|${ciCompare(data.first_name)}|${ciCompare(data.middle_name || '')}`;
+  const fioDup = active.find(
+    e =>
+      e.legal_entity_id === data.legal_entity_id &&
+      `${ciCompare(e.last_name)}|${ciCompare(e.first_name)}|${ciCompare(e.middle_name || '')}` === fullNameKey
+  );
+  if (fioDup) {
+    if (data.birth_date && fioDup.birth_date === data.birth_date) {
+      warnings.push(
+        `Полное совпадение ФИО и даты рождения внутри одного юридического лица: ${fioDup.last_name} ${fioDup.first_name}. Проверьте, не является ли запись дубликатом (объединение по ФИО запрещено).`
+      );
+    } else {
+      warnings.push(
+        `Уже есть работник с похожим ФИО в этом юридическом лице: ${fioDup.last_name} ${fioDup.first_name}. Если это совместитель — оставьте обе записи.`
+      );
+    }
+  }
+
+  return { conflict: null, warnings };
+}
+
+function snilsDupValue(v: string): string {
+  return v;
+}
+
+function formatFioShort(e: { last_name: string; first_name: string; middle_name?: string | null }): string {
+  const mi = e.middle_name ? ` ${e.middle_name.charAt(0)}.` : '';
+  return `${e.last_name} ${e.first_name}${mi}`;
+}
