@@ -13,6 +13,35 @@ export const AuditLogView: React.FC = () => {
     import_create: 'Импорт (создание)',
     import_update: 'Импорт (обновление)',
     restore: 'Восстановление БД',
+    contingent_create: 'Создание (контингент)',
+    contingent_update: 'Изменение (контингент)',
+    contingent_archive: 'Архив (контингент)',
+    contingent_restore: 'Восстановление (контингент)',
+    contingent_import: 'Импорт (контингент)',
+    employee_create: 'Создание (работник)',
+    employee_update: 'Изменение (работник)',
+    employee_archive: 'Архив (работник)',
+    employee_restore: 'Восстановление (работник)',
+    employee_import: 'Импорт (работник)',
+    employment_history_close: 'Закрытие периода работы',
+    employment_history_open: 'Открытие периода работы',
+  };
+
+  const getEntityTypeLabel = (type: string) => {
+    switch (type) {
+      case 'legal_entity':
+        return 'Юрлицо';
+      case 'contingent':
+        return 'Контингент';
+      case 'employee':
+        return 'Работник';
+      case 'employment_history':
+        return 'Кадры (D-005)';
+      case 'database':
+        return 'База данных';
+      default:
+        return type;
+    }
   };
 
   const formatDate = (isoString: string) => {
@@ -55,7 +84,7 @@ export const AuditLogView: React.FC = () => {
                     <td>{formatDate(log.changed_at)}</td>
                     <td>
                       <span className="badge">
-                        {log.entity_type === 'legal_entity' ? 'Юрлицо' : log.entity_type}
+                        {getEntityTypeLabel(log.entity_type)}
                       </span>
                     </td>
                     <td>

@@ -58,6 +58,12 @@ export const Header: React.FC<HeaderProps> = ({
           Контингент
         </button>
         <button
+          className={currentView.startsWith('employees') ? 'active' : ''}
+          onClick={() => onNavigate('employees')}
+        >
+          Работники
+        </button>
+        <button
           className={currentView === 'dictionaries' ? 'active' : ''}
           onClick={() => onNavigate('dictionaries')}
         >

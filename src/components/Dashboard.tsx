@@ -35,8 +35,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
       title: 'Работники',
       value: employeesCount,
       caption: `${employeesCount} человек в поимённом списке`,
-      empty_hint: 'Поимённый список работников (этап 4) — учёт СНИЛС и должностей.',
-      onClick: () => onNavigate('modules'),
+      empty_hint: 'Пока нет работников — добавьте первого или импортируйте из Excel.',
+      onClick: () => onNavigate('employees'),
     },
   ];
 
@@ -44,7 +44,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
     <div>
       <h1>Система автоматизации охраны труда</h1>
       <p style={{ color: '#4b5563', marginBottom: '1.25rem' }}>
-        Приложение на этапе разработки (этап 3 — реестр контингента работников). Показатели ниже — фактические данные из базы.
+        Приложение на этапе разработки (этап 4 — поимённый список работников). Показатели ниже — фактические данные из базы.
       </p>
 
       <div className="widgets">
@@ -69,11 +69,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
       </div>
 
       <div className="toolbar" style={{ marginTop: '1.5rem', marginBottom: '1.5rem' }}>
+        <button className="btn" onClick={() => onNavigate('employees-new')}>
+          + Добавить работника
+        </button>
         <button className="btn" onClick={() => onNavigate('contingent-new')}>
           + Создать запись контингента
         </button>
         <button className="btn" onClick={() => onNavigate('legal-entities-new')}>
           + Создать юридическое лицо
+        </button>
+        <button className="btn secondary" onClick={() => onNavigate('employees-import')}>
+          Импорт работников из Excel
         </button>
         <button className="btn secondary" onClick={() => onNavigate('contingent-import')}>
           Импорт контингента из Excel
@@ -101,6 +107,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                 <span className={`badge ${m.enabled ? 'ok' : 'warn'}`}>
                   {m.enabled ? 'Включён' : 'Отключён'}
                 </span>
+                {m.module_id === 'employees' && (
+                  <button
+                    type="button"
+                    className="btn-sm btn-secondary"
+                    onClick={() => onNavigate('employees')}
+                  >
+                    Перейти
+                  </button>
+                )}
                 {m.module_id === 'contingent' && (
                   <button
                     type="button"

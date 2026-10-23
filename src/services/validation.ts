@@ -128,19 +128,30 @@ export function normalizeSnils(value: string | null | undefined): string | null 
   if (digits.length !== 11) {
     throw new Error('СНИЛС должен содержать 11 цифр (формат XXX-XXX-XXX YY).');
   }
-  // Контрольная сумма СНИЛС
-  const weights = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-  let sum = 0;
-  for (let i = 0; i < 9; i++) {
-    sum += parseInt(digits[i], 10) * weights[i];
+
+  const numberPart = parseInt(digits.slice(0, 9), 10);
+  // Проверка контрольной суммы проводится для номеров больше 001-001-998
+  if (numberPart > 1001998) {
+    let sum = 0;
+    for (let i = 0; i < 9; i++) {
+      sum += parseInt(digits[i], 10) * (9 - i);
+    }
+    let control = 0;
+    if (sum < 100) {
+      control = sum;
+    } else if (sum === 100 || sum === 101) {
+      control = 0;
+    } else {
+      const rem = sum % 101;
+      control = (rem === 100 || rem === 101) ? 0 : rem;
+    }
+
+    const checkDigits = parseInt(digits.slice(9, 11), 10);
+    if (control !== checkDigits) {
+      throw new Error('Контрольная сумма СНИЛС не сходится — проверьте значение.');
+    }
   }
-  let control = sum % 11;
-  if (control === 10 || control === 11) {
-    control = 0;
-  }
-  if (control !== parseInt(digits[9], 10)) {
-    throw new Error('Контрольная сумма СНИЛС не сходится — проверьте значение.');
-  }
+
   // Канонический вид XXX-XXX-XXX YY
   return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6, 9)} ${digits[9]}${digits[10]}`;
 }

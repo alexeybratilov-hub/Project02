@@ -6,6 +6,9 @@ import {
   ContingentRecord,
   ContingentImportPreviewData,
   ContingentImportRowResult,
+  Employee,
+  EmployeeImportPreviewData,
+  EmployeeImportRowResult,
   Department,
   Position,
 } from '../types';
@@ -16,6 +19,8 @@ import {
   checksumWarning,
   normalizeText,
   ciCompare,
+  normalizeSnils,
+  validateDateNotFuture,
 } from './validation';
 import { storage } from './storage';
 
@@ -126,6 +131,44 @@ export const CONTINGENT_ALIASES: Record<string, string> = {
   'эб': 'electrical_safety_group',
 };
 
+// Employee headers according to IMPORT_EXPORT.md §5
+export const EMPLOYEE_HEADERS = [
+  'Юридическое лицо',
+  'Структурное подразделение',
+  'Должность',
+  'Фамилия',
+  'Имя',
+  'Отчество',
+  'Дата приёма',
+  'Дата рождения',
+  'СНИЛС',
+  'Запись контингента',
+];
+
+export const EMPLOYEE_ALIASES: Record<string, string> = {
+  'юридическое лицо': 'legal_entity',
+  'юрлицо': 'legal_entity',
+  'организация': 'legal_entity',
+  'структурное подразделение': 'department',
+  'подразделение': 'department',
+  'отдел': 'department',
+  'цех': 'department',
+  'должность': 'position',
+  'профессия': 'position',
+  'фамилия': 'last_name',
+  'имя': 'first_name',
+  'отчество': 'middle_name',
+  'дата приёма': 'hire_date',
+  'дата приема': 'hire_date',
+  'дата трудоустройства': 'hire_date',
+  'дата рождения': 'birth_date',
+  'рождение': 'birth_date',
+  'снилс': 'snils',
+  'запись контингента': 'contingent_label',
+  'контингент': 'contingent_label',
+  'рабочее место': 'contingent_label',
+};
+
 // Formula injection protection (IMPORT_EXPORT §6)
 export function sanitizeCell(val: any): any {
   if (val === null || val === undefined) return '';
@@ -150,6 +193,14 @@ export function downloadContingentTemplate(): void {
   ws['!cols'] = CONTINGENT_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 16) }));
   XLSX.utils.book_append_sheet(wb, ws, 'Контингент');
   XLSX.writeFile(wb, 'template_contingent.xlsx');
+}
+
+export function downloadEmployeeTemplate(): void {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([EMPLOYEE_HEADERS]);
+  ws['!cols'] = EMPLOYEE_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 16) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Работники');
+  XLSX.writeFile(wb, 'template_employees.xlsx');
 }
 
 export function exportToXLSX(entities: LegalEntity[], filename = 'legal_entities.xlsx'): void {
@@ -304,6 +355,108 @@ export function exportContingentToCSV(
   URL.revokeObjectURL(url);
 }
 
+export function formatDateForDisplay(d?: string | null): string {
+  if (!d) return '';
+  const parts = d.split('-');
+  if (parts.length === 3) {
+    return `${parts[2]}.${parts[1]}.${parts[0]}`;
+  }
+  return d;
+}
+
+export function exportEmployeesToXLSX(
+  employees: Employee[],
+  filename = 'employees.xlsx'
+): void {
+  const rows: any[][] = [EMPLOYEE_HEADERS];
+  const les = storage.listLegalEntities({ pageSize: 10000 }).items;
+  const depts = storage.getDepartmentsRaw();
+  const positions = storage.getPositionsRaw();
+  const contingent = storage.getContingentRaw();
+
+  for (const emp of employees) {
+    const le = les.find(l => l.id === emp.legal_entity_id);
+    const dept = depts.find(d => d.id === emp.department_id);
+    const pos = positions.find(p => p.id === emp.position_id);
+    let contingentLabel = '';
+    if (emp.contingent_record_id) {
+      const cr = contingent.find(c => c.id === emp.contingent_record_id);
+      if (cr) {
+        contingentLabel = cr.workplace_label || 'Основное рабочее место';
+      }
+    }
+
+    rows.push([
+      sanitizeCell(le?.full_name || ''),
+      sanitizeCell(dept?.name || ''),
+      sanitizeCell(pos?.name || ''),
+      sanitizeCell(emp.last_name),
+      sanitizeCell(emp.first_name),
+      sanitizeCell(emp.middle_name || ''),
+      sanitizeCell(formatDateForDisplay(emp.hire_date)),
+      sanitizeCell(formatDateForDisplay(emp.birth_date)),
+      sanitizeCell(emp.snils || ''),
+      sanitizeCell(contingentLabel),
+    ]);
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = EMPLOYEE_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 16) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Работники');
+  XLSX.writeFile(wb, filename);
+}
+
+export function exportEmployeesToCSV(
+  employees: Employee[],
+  filename = 'employees.csv'
+): void {
+  const lines: string[] = [];
+  lines.push(EMPLOYEE_HEADERS.map(h => `"${h.replace(/"/g, '""')}"`).join(';'));
+
+  const les = storage.listLegalEntities({ pageSize: 10000 }).items;
+  const depts = storage.getDepartmentsRaw();
+  const positions = storage.getPositionsRaw();
+  const contingent = storage.getContingentRaw();
+
+  for (const emp of employees) {
+    const le = les.find(l => l.id === emp.legal_entity_id);
+    const dept = depts.find(d => d.id === emp.department_id);
+    const pos = positions.find(p => p.id === emp.position_id);
+    let contingentLabel = '';
+    if (emp.contingent_record_id) {
+      const cr = contingent.find(c => c.id === emp.contingent_record_id);
+      if (cr) {
+        contingentLabel = cr.workplace_label || 'Основное рабочее место';
+      }
+    }
+
+    const row = [
+      sanitizeCell(le?.full_name || ''),
+      sanitizeCell(dept?.name || ''),
+      sanitizeCell(pos?.name || ''),
+      sanitizeCell(emp.last_name),
+      sanitizeCell(emp.first_name),
+      sanitizeCell(emp.middle_name || ''),
+      sanitizeCell(formatDateForDisplay(emp.hire_date)),
+      sanitizeCell(formatDateForDisplay(emp.birth_date)),
+      sanitizeCell(emp.snils || ''),
+      sanitizeCell(contingentLabel),
+    ];
+    lines.push(row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(';'));
+  }
+
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export function normalizeHeader(h: any): string {
   if (!h) return '';
   return String(h).toLowerCase().trim().replace(/ё/g, 'е').replace(/\s+/g, ' ');
@@ -392,6 +545,48 @@ export function mapContingentHeaders(
   }
   if (!used.has('position')) {
     problems.unshift('Отсутствует обязательный столбец «Должность».');
+  }
+
+  return { mapping, problems };
+}
+
+export function mapEmployeeHeaders(
+  headers: string[]
+): { mapping: Record<number, string>; problems: string[] } {
+  const mapping: Record<number, string> = {};
+  const problems: string[] = [];
+  const used = new Set<string>();
+
+  headers.forEach((h, idx) => {
+    const norm = normalizeHeader(h);
+    if (!norm) return;
+    const key = EMPLOYEE_ALIASES[norm];
+    if (key) {
+      if (used.has(key)) {
+        problems.push(`Столбец «${h}» повторяется — лишние столбцы игнорируются.`);
+      } else {
+        used.add(key);
+        mapping[idx] = key;
+      }
+    } else {
+      problems.push(`Неизвестный столбец «${h}» — будет пропущен.`);
+    }
+  });
+
+  if (!used.has('legal_entity')) {
+    problems.unshift('Отсутствует обязательный столбец «Юридическое лицо».');
+  }
+  if (!used.has('department')) {
+    problems.unshift('Отсутствует обязательный столбец «Структурное подразделение».');
+  }
+  if (!used.has('position')) {
+    problems.unshift('Отсутствует обязательный столбец «Должность».');
+  }
+  if (!used.has('last_name')) {
+    problems.unshift('Отсутствует обязательный столбец «Фамилия».');
+  }
+  if (!used.has('first_name')) {
+    problems.unshift('Отсутствует обязательный столбец «Имя».');
   }
 
   return { mapping, problems };
@@ -669,6 +864,257 @@ export function generateContingentPreview(
         } else {
           res.action = 'skip';
           res.warnings.push('Запись уже существует — строка будет пропущена.');
+        }
+      }
+    }
+
+    results.push(res);
+  });
+
+  const summary = {
+    total: results.length,
+    add: results.filter(r => r.action === 'add').length,
+    update: results.filter(r => r.action === 'update').length,
+    skip: results.filter(r => r.action === 'skip').length,
+    reject: results.filter(r => r.action === 'reject').length,
+  };
+
+  return {
+    results,
+    structure_errors: [],
+    summary,
+  };
+}
+
+export function parseExcelDate(val: any): string | null {
+  if (val === null || val === undefined || val === '') return null;
+  if (typeof val === 'number') {
+    const date = XLSX.SSF.parse_date_code(val);
+    if (date) {
+      const y = String(date.y).padStart(4, '0');
+      const m = String(date.m).padStart(2, '0');
+      const d = String(date.d).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+  }
+  const s = String(val).trim();
+  if (!s) return null;
+  const ruMatch = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(s);
+  if (ruMatch) {
+    const d = ruMatch[1].padStart(2, '0');
+    const m = ruMatch[2].padStart(2, '0');
+    const y = ruMatch[3];
+    return `${y}-${m}-${d}`;
+  }
+  const isoMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+  if (isoMatch) {
+    const y = isoMatch[1];
+    const m = isoMatch[2].padStart(2, '0');
+    const d = isoMatch[3].padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return s;
+}
+
+export function generateEmployeePreview(
+  rawRows: any[][],
+  mapping: Record<number, string>,
+  existingEmployees: Employee[],
+  mode: 'add' | 'update'
+): EmployeeImportPreviewData {
+  const results: EmployeeImportRowResult[] = [];
+  const les = storage.listLegalEntities({ pageSize: 10000 }).items;
+  const depts = storage.getDepartmentsRaw();
+  const positions = storage.getPositionsRaw();
+  const contingent = storage.getContingentRaw();
+
+  rawRows.forEach((row, i) => {
+    const rowNum = i + 2;
+    const rec: Record<string, any> = {};
+
+    Object.entries(mapping).forEach(([colIdx, key]) => {
+      const idx = parseInt(colIdx, 10);
+      rec[key] = row[idx];
+    });
+
+    const leQuery = String(rec.legal_entity || '').trim();
+    const deptQuery = String(rec.department || '').trim();
+    const posQuery = String(rec.position || '').trim();
+    const lastName = String(rec.last_name || '').trim();
+    const firstName = String(rec.first_name || '').trim();
+    const middleName = String(rec.middle_name || '').trim();
+    const contingentLabel = String(rec.contingent_label || '').trim();
+    const rawHireDate = rec.hire_date;
+    const rawBirthDate = rec.birth_date;
+    const rawSnils = rec.snils;
+
+    const title = `${lastName} ${firstName}${middleName ? ' ' + middleName : ''} (${posQuery || '?'})`;
+
+    const res: EmployeeImportRowResult = {
+      row: rowNum,
+      action: 'add',
+      title,
+      errors: [],
+      warnings: [],
+      changes: [],
+      data: {
+        legal_entity_name: leQuery,
+        department_name: deptQuery,
+        position_name: posQuery,
+        last_name: lastName,
+        first_name: firstName,
+        middle_name: middleName || undefined,
+        contingent_label: contingentLabel || undefined,
+      },
+    };
+
+    if (!leQuery) res.errors.push('Не указано юридическое лицо.');
+    if (!deptQuery) res.errors.push('Не указано структурное подразделение.');
+    if (!posQuery) res.errors.push('Не указана должность.');
+    if (!lastName) res.errors.push('Не указана фамилия.');
+    if (!firstName) res.errors.push('Не указано имя.');
+
+    // Dates parsing & validation
+    let parsedHireDate: string | null = null;
+    if (rawHireDate !== null && rawHireDate !== undefined && String(rawHireDate).trim() !== '') {
+      parsedHireDate = parseExcelDate(rawHireDate);
+      if (parsedHireDate) {
+        try {
+          validateDateNotFuture(parsedHireDate, 'Дата приёма');
+          res.data.hire_date = parsedHireDate;
+        } catch (e: any) {
+          res.errors.push(e.message);
+        }
+      }
+    }
+
+    let parsedBirthDate: string | null = null;
+    if (rawBirthDate !== null && rawBirthDate !== undefined && String(rawBirthDate).trim() !== '') {
+      parsedBirthDate = parseExcelDate(rawBirthDate);
+      if (parsedBirthDate) {
+        try {
+          validateDateNotFuture(parsedBirthDate, 'Дата рождения');
+          res.data.birth_date = parsedBirthDate;
+        } catch (e: any) {
+          res.errors.push(e.message);
+        }
+      }
+    }
+
+    // SNILS validation & normalization
+    let normalizedSnils: string | null = null;
+    if (rawSnils !== null && rawSnils !== undefined && String(rawSnils).trim() !== '') {
+      try {
+        normalizedSnils = normalizeSnils(String(rawSnils));
+        res.data.snils = normalizedSnils || undefined;
+      } catch (e: any) {
+        res.warnings.push(`СНИЛС «${rawSnils}»: ${e.message}`);
+        const digits = String(rawSnils).replace(/\D/g, '');
+        if (digits.length === 11) {
+          res.data.snils = `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6, 9)} ${digits[9]}${digits[10]}`;
+        }
+      }
+    } else {
+      res.warnings.push('СНИЛС не указан. Запись будет добавлена без идентификации (объединение по ФИО запрещено).');
+    }
+
+    // Match Legal Entity
+    let targetLe: LegalEntity | undefined;
+    if (leQuery) {
+      targetLe = les.find(
+        l =>
+          l.status === 'active' &&
+          (l.inn === leQuery ||
+            ciCompare(l.full_name) === ciCompare(leQuery) ||
+            ciCompare(l.short_name || '') === ciCompare(leQuery))
+      );
+      if (!targetLe) {
+        res.errors.push(`Юридическое лицо «${leQuery}» не найдено в базе.`);
+      }
+    }
+
+    if (res.errors.length > 0) {
+      res.action = 'reject';
+      results.push(res);
+      return;
+    }
+
+    // Department & Position warnings
+    if (targetLe) {
+      const targetDept = depts.find(
+        d =>
+          d.legal_entity_id === targetLe!.id &&
+          ciCompare(d.name) === ciCompare(deptQuery) &&
+          d.status === 'active'
+      );
+      if (!targetDept) {
+        res.warnings.push(`Подразделение «${deptQuery}» отсутствует — будет создано автоматически.`);
+      }
+
+      const posNorm = posQuery.toLowerCase().replace(/\s+/g, ' ').trim();
+      const targetPos = positions.find(
+        p => p.normalized_name === posNorm && p.status === 'active'
+      );
+      if (!targetPos) {
+        res.warnings.push(`Должность «${posQuery}» отсутствует в справочнике — будет создана.`);
+      }
+
+      if (contingentLabel) {
+        const cr = contingent.find(
+          c =>
+            c.legal_entity_id === targetLe!.id &&
+            c.status === 'active' &&
+            ciCompare(c.workplace_label || '') === ciCompare(contingentLabel)
+        );
+        if (!cr) {
+          res.warnings.push(`Запись контингента «${contingentLabel}» не найдена для этого юридического лица.`);
+        }
+      }
+
+      // Identification according to IMPORT_EXPORT §5:
+      // "Идентификация: СНИЛС + юридическое лицо. Без СНИЛС — только добавление с предупреждением по ФИО и дате рождения. Объединение только по ФИО запрещено."
+      const snilsForMatch = res.data.snils ? ciCompare(res.data.snils) : '';
+      let matchBySnils: Employee | undefined;
+      if (snilsForMatch) {
+        matchBySnils = existingEmployees.find(
+          e =>
+            e.status === 'active' &&
+            e.legal_entity_id === targetLe!.id &&
+            ciCompare(e.snils || '') === snilsForMatch
+        );
+      }
+
+      if (matchBySnils) {
+        if (mode === 'update') {
+          res.action = 'update';
+          res.changes.push(
+            `Найден работник по СНИЛС (${matchBySnils.last_name} ${matchBySnils.first_name}). Данные будут обновлены.`
+          );
+        } else {
+          res.action = 'skip';
+          res.warnings.push(
+            `Работник с таким СНИЛС уже существует (${matchBySnils.last_name} ${matchBySnils.first_name}) — строка будет пропущена.`
+          );
+        }
+      } else {
+        res.action = 'add';
+        const fioMatch = existingEmployees.find(
+          e =>
+            e.status === 'active' &&
+            e.legal_entity_id === targetLe!.id &&
+            ciCompare(e.last_name) === ciCompare(lastName) &&
+            ciCompare(e.first_name) === ciCompare(firstName)
+        );
+        if (fioMatch) {
+          if (parsedBirthDate && fioMatch.birth_date === parsedBirthDate) {
+            res.warnings.push(
+              `Совпадение ФИО и даты рождения: ${fioMatch.last_name} ${fioMatch.first_name}. Будет создана отдельная запись (объединение по ФИО запрещено).`
+            );
+          } else {
+            res.warnings.push(
+              `Похожее ФИО уже есть в организации: ${fioMatch.last_name} ${fioMatch.first_name}. Будет создана отдельная запись.`
+            );
+          }
         }
       }
     }

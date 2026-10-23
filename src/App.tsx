@@ -10,6 +10,10 @@ import { ContingentList } from './components/ContingentList';
 import { ContingentCard } from './components/ContingentCard';
 import { ContingentForm } from './components/ContingentForm';
 import { ContingentImport } from './components/ContingentImport';
+import { EmployeesList } from './components/EmployeesList';
+import { EmployeeCard } from './components/EmployeeCard';
+import { EmployeeForm } from './components/EmployeeForm';
+import { EmployeesImport } from './components/EmployeesImport';
 import { DictionariesView } from './components/DictionariesView';
 import { AuditLogView } from './components/AuditLogView';
 import { BackupView } from './components/BackupView';
@@ -39,10 +43,16 @@ export const App: React.FC = () => {
         const id = hash.replace('contingent/', '');
         setCurrentView('contingent-view');
         setTargetId(id);
+      } else if (hash.startsWith('employees/')) {
+        const id = hash.replace('employees/', '');
+        setCurrentView('employees-view');
+        setTargetId(id);
       } else if (hash === 'legal-entities') {
         setCurrentView('legal-entities');
       } else if (hash === 'contingent') {
         setCurrentView('contingent');
+      } else if (hash === 'employees') {
+        setCurrentView('employees');
       } else if (hash === 'dictionaries') {
         setCurrentView('dictionaries');
       } else if (hash === 'modules') {
@@ -64,6 +74,8 @@ export const App: React.FC = () => {
       window.location.hash = `legal-entities/${id}`;
     } else if (view === 'contingent-view' && id) {
       window.location.hash = `contingent/${id}`;
+    } else if (view === 'employees-view' && id) {
+      window.location.hash = `employees/${id}`;
     } else if (view === 'home') {
       window.location.hash = '';
     } else {
@@ -148,6 +160,30 @@ export const App: React.FC = () => {
 
         {currentView === 'contingent-import' && (
           <ContingentImport onNavigate={handleNavigate} />
+        )}
+
+        {/* Employees (Stage 4) */}
+        {currentView === 'employees' && (
+          <EmployeesList
+            onNavigate={handleNavigate}
+            filterLeId={targetId}
+          />
+        )}
+
+        {currentView === 'employees-new' && (
+          <EmployeeForm onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'employees-edit' && (
+          <EmployeeForm id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'employees-view' && targetId && (
+          <EmployeeCard id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'employees-import' && (
+          <EmployeesImport onNavigate={handleNavigate} />
         )}
 
         {/* Dictionaries */}

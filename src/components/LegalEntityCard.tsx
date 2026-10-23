@@ -161,13 +161,24 @@ export const LegalEntityCard: React.FC<LegalEntityCardProps> = ({
         >
           {counts.contingent_records} (показать реестр)
         </button>
-        ; работники: <strong>{counts.employees}</strong>.<br />
+        ; работники:{' '}
+        <button
+          type="button"
+          className="link-action"
+          onClick={() => onNavigate('employees', item.id)}
+        >
+          {counts.employees} (показать работников)
+        </button>
+        .<br />
         Архивирование не удаляет связанные данные (D-009).
       </p>
 
       <div className="toolbar" style={{ marginTop: '1.5rem' }}>
         <button className="btn" onClick={() => onNavigate('legal-entities-edit', item.id)}>
           Изменить
+        </button>
+        <button className="btn secondary" onClick={() => onNavigate('employees-new')}>
+          + Добавить работника
         </button>
 
         {isCurrent ? (

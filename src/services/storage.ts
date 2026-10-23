@@ -4,6 +4,7 @@ import {
   Position,
   ContingentRecord,
   Employee,
+  EmploymentHistoryRecord,
   AuditLogItem,
   ModuleItem,
   EntityStatus,
@@ -19,6 +20,9 @@ import {
   validateOgrn,
   findDuplicates,
   ciCompare,
+  normalizeSnils,
+  validateDateNotFuture,
+  findEmployeeDuplicates,
 } from './validation';
 
 const STORAGE_KEYS = {
@@ -27,6 +31,7 @@ const STORAGE_KEYS = {
   POSITIONS: 'saot_positions',
   CONTINGENT: 'saot_contingent',
   EMPLOYEES: 'saot_employees',
+  EMPLOYMENT_HISTORY: 'saot_employment_history',
   AUDIT_LOG: 'saot_audit_log',
   MODULES: 'saot_modules',
   CURRENT_LE: 'saot_current_le',
@@ -172,6 +177,20 @@ class StorageService {
 
   public saveEmployeesRaw(items: Employee[]): void {
     saveToStorage(STORAGE_KEYS.EMPLOYEES, items);
+  }
+
+  public getEmploymentHistoryRaw(): EmploymentHistoryRecord[] {
+    return loadFromStorage<EmploymentHistoryRecord[]>(STORAGE_KEYS.EMPLOYMENT_HISTORY, []);
+  }
+
+  public saveEmploymentHistoryRaw(items: EmploymentHistoryRecord[]): void {
+    saveToStorage(STORAGE_KEYS.EMPLOYMENT_HISTORY, items);
+  }
+
+  public listEmploymentHistory(employeeId: string): EmploymentHistoryRecord[] {
+    return this.getEmploymentHistoryRaw()
+      .filter(h => h.employee_id === employeeId)
+      .sort((a, b) => (b.start_date || b.created_at).localeCompare(a.start_date || a.created_at));
   }
 
   public getAuditLogs(): AuditLogItem[] {
@@ -881,6 +900,470 @@ class StorageService {
     return { added, updated, skipped, rejected };
   }
 
+  // --- Employee CRUD (Stage 4, FR-07…FR-09, D-004, D-005, D-007) ---
+  public listEmployees(params?: {
+    legal_entity_id?: string;
+    department_id?: string;
+    position_id?: string;
+    status?: EntityStatus;
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  }): { items: Employee[]; total: number } {
+    let list = this.getEmployeesRaw();
+    const currentStatus = params?.status || 'active';
+    list = list.filter(e => e.status === currentStatus);
+
+    if (params?.legal_entity_id) {
+      list = list.filter(e => e.legal_entity_id === params.legal_entity_id);
+    }
+    if (params?.department_id) {
+      list = list.filter(e => e.department_id === params.department_id);
+    }
+    if (params?.position_id) {
+      list = list.filter(e => e.position_id === params.position_id);
+    }
+
+    const term = (params?.search || '').trim();
+    if (term) {
+      const needle = ciCompare(term);
+      const depts = this.getDepartmentsRaw();
+      const posList = this.getPositionsRaw();
+      list = list.filter(e => {
+        const fio = `${e.last_name} ${e.first_name} ${e.middle_name || ''}`;
+        const snils = e.snils || '';
+        const dept = depts.find(d => d.id === e.department_id);
+        const pos = posList.find(p => p.id === e.position_id);
+        return (
+          ciCompare(fio).includes(needle) ||
+          ciCompare(snils).includes(needle) ||
+          (dept && ciCompare(dept.name).includes(needle)) ||
+          (pos && ciCompare(pos.name).includes(needle))
+        );
+      });
+    }
+
+    // Sort by last_name, then first_name (Russian alphabetical)
+    list.sort((a, b) => {
+      const cmpLast = ciCompare(a.last_name).localeCompare(ciCompare(b.last_name), 'ru');
+      if (cmpLast !== 0) return cmpLast;
+      return ciCompare(a.first_name).localeCompare(ciCompare(b.first_name), 'ru');
+    });
+
+    const total = list.length;
+    const page = Math.max(1, params?.page || 1);
+    const pageSize = params?.pageSize || 30;
+    const start = (page - 1) * pageSize;
+    const items = list.slice(start, start + pageSize);
+
+    return { items, total };
+  }
+
+  public getEmployeeById(id: string): Employee | null {
+    return this.getEmployeesRaw().find(e => e.id === id) || null;
+  }
+
+  public createEmployee(data: {
+    legal_entity_id: string;
+    department_id: string;
+    position_id: string;
+    last_name: string;
+    first_name: string;
+    middle_name?: string | null;
+    hire_date?: string | null;
+    birth_date?: string | null;
+    snils?: string | null;
+    contingent_record_id?: string | null;
+  }): { employee: Employee; warnings: string[] } {
+    const lastName = normalizeText(data.last_name);
+    const firstName = normalizeText(data.first_name);
+    if (!lastName) throw new Error('Фамилия обязательна для заполнения.');
+    if (!firstName) throw new Error('Имя обязательно для заполнения.');
+    if (!data.legal_entity_id) throw new Error('Юридическое лицо обязательно для заполнения.');
+    if (!data.department_id) throw new Error('Подразделение обязательно для заполнения.');
+    if (!data.position_id) throw new Error('Должность обязательна для заполнения.');
+
+    // Integrity: Department must belong to legal entity
+    const dept = this.getDepartmentById(data.department_id);
+    if (!dept || dept.legal_entity_id !== data.legal_entity_id) {
+      throw new Error('Подразделение не принадлежит выбранному юридическому лицу.');
+    }
+
+    // Integrity: If contingent_record_id is given, it must belong to the same legal entity (FR-09)
+    if (data.contingent_record_id) {
+      const cr = this.getContingentRecordById(data.contingent_record_id);
+      if (!cr || cr.legal_entity_id !== data.legal_entity_id) {
+        throw new Error('Выбранная запись контингента не принадлежит выбранному юридическому лицу.');
+      }
+    }
+
+    // Validate dates
+    const hireDate = data.hire_date ? validateDateNotFuture(data.hire_date, 'Дата приёма') : null;
+    const birthDate = data.birth_date ? validateDateNotFuture(data.birth_date, 'Дата рождения') : null;
+
+    // Validate SNILS
+    const snils = data.snils ? normalizeSnils(data.snils) : null;
+
+    // Check duplicate warnings (without auto-merge)
+    const allEmployees = this.getEmployeesRaw();
+    const { warnings } = findEmployeeDuplicates(allEmployees, {
+      legal_entity_id: data.legal_entity_id,
+      last_name: lastName,
+      first_name: firstName,
+      middle_name: data.middle_name,
+      birth_date: birthDate,
+      snils: snils,
+    });
+
+    const now = nowISO();
+    const newEmployee: Employee = {
+      id: generateUUID(),
+      legal_entity_id: data.legal_entity_id,
+      department_id: data.department_id,
+      position_id: data.position_id,
+      contingent_record_id: data.contingent_record_id || null,
+      last_name: lastName,
+      first_name: firstName,
+      middle_name: normalizeText(data.middle_name),
+      hire_date: hireDate,
+      birth_date: birthDate,
+      snils: snils,
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    };
+
+    allEmployees.push(newEmployee);
+    this.saveEmployeesRaw(allEmployees);
+
+    // Initial employment history record (D-005)
+    const historyList = this.getEmploymentHistoryRaw();
+    const historyRec: EmploymentHistoryRecord = {
+      id: generateUUID(),
+      employee_id: newEmployee.id,
+      start_date: hireDate || now.split('T')[0],
+      end_date: null,
+      department_id: newEmployee.department_id,
+      position_id: newEmployee.position_id,
+      contingent_record_id: newEmployee.contingent_record_id || null,
+      reason: 'Приём на работу',
+      comment: null,
+      created_at: now,
+    };
+    historyList.push(historyRec);
+    this.saveEmploymentHistoryRaw(historyList);
+
+    this.addAudit('employee', newEmployee.id, 'employee_create', null, { ...newEmployee });
+    return { employee: newEmployee, warnings };
+  }
+
+  public updateEmployee(
+    id: string,
+    data: Partial<Employee> & { transfer_reason?: string; transfer_comment?: string }
+  ): { employee: Employee; warnings: string[] } {
+    const all = this.getEmployeesRaw();
+    const idx = all.findIndex(e => e.id === id);
+    if (idx === -1) throw new Error('Работник не найден.');
+
+    const existing = all[idx];
+    const before = { ...existing };
+
+    const targetLeId = data.legal_entity_id || existing.legal_entity_id;
+    const targetDeptId = data.department_id || existing.department_id;
+    const targetPosId = data.position_id || existing.position_id;
+    const targetContingentId =
+      data.contingent_record_id !== undefined ? data.contingent_record_id : existing.contingent_record_id;
+
+    // Check dept integrity
+    const dept = this.getDepartmentById(targetDeptId);
+    if (dept && dept.legal_entity_id !== targetLeId) {
+      throw new Error('Подразделение не принадлежит выбранному юридическому лицу.');
+    }
+
+    // Check contingent integrity
+    if (targetContingentId) {
+      const cr = this.getContingentRecordById(targetContingentId);
+      if (cr && cr.legal_entity_id !== targetLeId) {
+        throw new Error('Выбранная запись контингента не принадлежит выбранному юридическому лицу.');
+      }
+    }
+
+    const hireDate =
+      data.hire_date !== undefined
+        ? data.hire_date
+          ? validateDateNotFuture(data.hire_date, 'Дата приёма')
+          : null
+        : existing.hire_date;
+    const birthDate =
+      data.birth_date !== undefined
+        ? data.birth_date
+          ? validateDateNotFuture(data.birth_date, 'Дата рождения')
+          : null
+        : existing.birth_date;
+    const snils =
+      data.snils !== undefined
+        ? data.snils
+          ? normalizeSnils(data.snils)
+          : null
+        : existing.snils;
+
+    const lastName =
+      data.last_name !== undefined ? normalizeText(data.last_name) || existing.last_name : existing.last_name;
+    const firstName =
+      data.first_name !== undefined ? normalizeText(data.first_name) || existing.first_name : existing.first_name;
+    const middleName =
+      data.middle_name !== undefined ? normalizeText(data.middle_name) : existing.middle_name;
+
+    // Duplicate check warnings
+    const { warnings } = findEmployeeDuplicates(all, {
+      legal_entity_id: targetLeId,
+      last_name: lastName,
+      first_name: firstName,
+      middle_name: middleName,
+      birth_date: birthDate,
+      snils: snils,
+      exclude_id: id,
+    });
+
+    // Check if transfer occurred (department, position, or contingent changed - D-005)
+    const isTransferred =
+      targetDeptId !== existing.department_id ||
+      targetPosId !== existing.position_id ||
+      (targetContingentId || null) !== (existing.contingent_record_id || null);
+
+    const now = nowISO();
+    const today = now.split('T')[0];
+
+    if (isTransferred) {
+      const historyList = this.getEmploymentHistoryRaw();
+      const currentPeriod = historyList.find(h => h.employee_id === id && !h.end_date);
+      if (currentPeriod) {
+        currentPeriod.end_date = today;
+        this.addAudit('employment_history', currentPeriod.id, 'employment_history_close', null, {
+          ...currentPeriod,
+        });
+      }
+
+      const newPeriod: EmploymentHistoryRecord = {
+        id: generateUUID(),
+        employee_id: id,
+        start_date: today,
+        end_date: null,
+        department_id: targetDeptId,
+        position_id: targetPosId,
+        contingent_record_id: targetContingentId || null,
+        reason: data.transfer_reason || 'Кадровое перемещение',
+        comment: data.transfer_comment || null,
+        created_at: now,
+      };
+      historyList.push(newPeriod);
+      this.saveEmploymentHistoryRaw(historyList);
+      this.addAudit('employment_history', newPeriod.id, 'employment_history_open', null, { ...newPeriod });
+    }
+
+    const updated: Employee = {
+      ...existing,
+      legal_entity_id: targetLeId,
+      department_id: targetDeptId,
+      position_id: targetPosId,
+      contingent_record_id: targetContingentId || null,
+      last_name: lastName,
+      first_name: firstName,
+      middle_name: middleName,
+      hire_date: hireDate,
+      birth_date: birthDate,
+      snils: snils,
+      updated_at: now,
+    };
+
+    all[idx] = updated;
+    this.saveEmployeesRaw(all);
+
+    this.addAudit('employee', updated.id, 'employee_update', before, { ...updated });
+    return { employee: updated, warnings };
+  }
+
+  public archiveEmployee(id: string): Employee {
+    const all = this.getEmployeesRaw();
+    const idx = all.findIndex(e => e.id === id);
+    if (idx === -1) throw new Error('Работник не найден.');
+
+    const existing = all[idx];
+    if (existing.status === 'archived') throw new Error('Работник уже в архиве.');
+
+    const before = { ...existing };
+    existing.status = 'archived';
+    existing.updated_at = nowISO();
+    all[idx] = existing;
+    this.saveEmployeesRaw(all);
+
+    this.addAudit('employee', existing.id, 'employee_archive', before, { ...existing });
+    return existing;
+  }
+
+  public restoreEmployee(id: string): Employee {
+    const all = this.getEmployeesRaw();
+    const idx = all.findIndex(e => e.id === id);
+    if (idx === -1) throw new Error('Работник не найден.');
+
+    const existing = all[idx];
+    if (existing.status === 'active') throw new Error('Работник уже активен.');
+
+    const before = { ...existing };
+    existing.status = 'active';
+    existing.updated_at = nowISO();
+    all[idx] = existing;
+    this.saveEmployeesRaw(all);
+
+    this.addAudit('employee', existing.id, 'employee_restore', before, { ...existing });
+    return existing;
+  }
+
+  public commitEmployeeImport(
+    records: Array<{
+      legal_entity_id: string;
+      department_id: string;
+      position_id: string;
+      last_name: string;
+      first_name: string;
+      middle_name?: string | null;
+      hire_date?: string | null;
+      birth_date?: string | null;
+      snils?: string | null;
+      contingent_record_id?: string | null;
+    }>,
+    mode: 'add' | 'update'
+  ): { added: number; updated: number; skipped: number; rejected: number } {
+    const all = [...this.getEmployeesRaw()];
+    const historyList = [...this.getEmploymentHistoryRaw()];
+    let added = 0;
+    let updated = 0;
+    let skipped = 0;
+    let rejected = 0;
+
+    for (const rec of records) {
+      if (!rec.legal_entity_id || !rec.department_id || !rec.position_id || !rec.last_name || !rec.first_name) {
+        rejected++;
+        continue;
+      }
+
+      const snilsNorm = rec.snils ? ciCompare(rec.snils) : '';
+
+      // Identification according to IMPORT_EXPORT §5:
+      // "Идентификация: СНИЛС + юридическое лицо. Без СНИЛС — только добавление с предупреждением по ФИО и дате рождения. Объединение только по ФИО запрещено."
+      let existingIdx = -1;
+      if (snilsNorm) {
+        existingIdx = all.findIndex(
+          e =>
+            e.status === 'active' &&
+            e.legal_entity_id === rec.legal_entity_id &&
+            ciCompare(e.snils || '') === snilsNorm
+        );
+      }
+
+      if (existingIdx >= 0) {
+        if (mode === 'update') {
+          const existing = all[existingIdx];
+          const before = { ...existing };
+
+          const isTransferred =
+            rec.department_id !== existing.department_id ||
+            rec.position_id !== existing.position_id ||
+            (rec.contingent_record_id || null) !== (existing.contingent_record_id || null);
+
+          const now = nowISO();
+          const today = now.split('T')[0];
+
+          if (isTransferred) {
+            const currentPeriod = historyList.find(h => h.employee_id === existing.id && !h.end_date);
+            if (currentPeriod) {
+              currentPeriod.end_date = today;
+              this.addAudit('employment_history', currentPeriod.id, 'employment_history_close', null, {
+                ...currentPeriod,
+              });
+            }
+
+            const newPeriod: EmploymentHistoryRecord = {
+              id: generateUUID(),
+              employee_id: existing.id,
+              start_date: today,
+              end_date: null,
+              department_id: rec.department_id,
+              position_id: rec.position_id,
+              contingent_record_id: rec.contingent_record_id || null,
+              reason: 'Кадровое перемещение (импорт)',
+              comment: null,
+              created_at: now,
+            };
+            historyList.push(newPeriod);
+            this.addAudit('employment_history', newPeriod.id, 'employment_history_open', null, { ...newPeriod });
+          }
+
+          const updatedEmp: Employee = {
+            ...existing,
+            department_id: rec.department_id,
+            position_id: rec.position_id,
+            contingent_record_id:
+              rec.contingent_record_id !== undefined ? rec.contingent_record_id : existing.contingent_record_id,
+            last_name: rec.last_name || existing.last_name,
+            first_name: rec.first_name || existing.first_name,
+            middle_name: rec.middle_name !== undefined ? rec.middle_name : existing.middle_name,
+            hire_date: rec.hire_date || existing.hire_date,
+            birth_date: rec.birth_date || existing.birth_date,
+            updated_at: now,
+          };
+
+          all[existingIdx] = updatedEmp;
+          this.addAudit('employee', updatedEmp.id, 'employee_update', before, { ...updatedEmp });
+          updated++;
+        } else {
+          skipped++;
+        }
+      } else {
+        const now = nowISO();
+        const newEmp: Employee = {
+          id: generateUUID(),
+          legal_entity_id: rec.legal_entity_id,
+          department_id: rec.department_id,
+          position_id: rec.position_id,
+          contingent_record_id: rec.contingent_record_id || null,
+          last_name: rec.last_name,
+          first_name: rec.first_name,
+          middle_name: rec.middle_name || null,
+          hire_date: rec.hire_date || null,
+          birth_date: rec.birth_date || null,
+          snils: rec.snils || null,
+          status: 'active',
+          created_at: now,
+          updated_at: now,
+        };
+
+        all.push(newEmp);
+
+        const historyRec: EmploymentHistoryRecord = {
+          id: generateUUID(),
+          employee_id: newEmp.id,
+          start_date: rec.hire_date || now.split('T')[0],
+          end_date: null,
+          department_id: newEmp.department_id,
+          position_id: newEmp.position_id,
+          contingent_record_id: newEmp.contingent_record_id || null,
+          reason: 'Приём на работу (импорт)',
+          comment: null,
+          created_at: now,
+        };
+        historyList.push(historyRec);
+
+        this.addAudit('employee', newEmp.id, 'employee_import', null, { ...newEmp });
+        added++;
+      }
+    }
+
+    this.saveEmployeesRaw(all);
+    this.saveEmploymentHistoryRaw(historyList);
+    return { added, updated, skipped, rejected };
+  }
+
   // --- Bulk Import Transaction for Legal Entities ---
   public commitImport(records: Partial<LegalEntity>[], mode: 'add' | 'update'): {
     added: number;
@@ -986,6 +1469,7 @@ class StorageService {
         positions: this.getPositionsRaw().length,
         contingent: this.getContingentRaw().length,
         employees: this.getEmployeesRaw().length,
+        employment_history: this.getEmploymentHistoryRaw().length,
         audit_logs: this.getAuditLogs().length,
       },
       data: {
@@ -994,6 +1478,7 @@ class StorageService {
         positions: this.getPositionsRaw(),
         contingent: this.getContingentRaw(),
         employees: this.getEmployeesRaw(),
+        employment_history: this.getEmploymentHistoryRaw(),
         audit_logs: this.getAuditLogs(),
       },
     };
@@ -1037,6 +1522,9 @@ class StorageService {
     }
     if (Array.isArray(parsed.data.employees)) {
       saveToStorage(STORAGE_KEYS.EMPLOYEES, parsed.data.employees);
+    }
+    if (Array.isArray(parsed.data.employment_history)) {
+      saveToStorage(STORAGE_KEYS.EMPLOYMENT_HISTORY, parsed.data.employment_history);
     }
     if (Array.isArray(parsed.data.audit_logs)) {
       saveToStorage(STORAGE_KEYS.AUDIT_LOG, parsed.data.audit_logs);
