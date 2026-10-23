@@ -132,7 +132,7 @@ class TestScenariosViaHttp:
         client.post("/legal-entities/new", data={"full_name": "АО Экспорт Б"})
         export = client.get("/legal-entities/api/export")
         assert export.status_code == 200
-        wb = Workbook().load if False else None
+
         from openpyxl import load_workbook
 
         rows = list(load_workbook(io.BytesIO(export.content)).active.iter_rows(values_only=True))
@@ -143,12 +143,14 @@ class TestScenariosViaHttp:
         assert "ООО Экспорт А".encode() in csv.content and "АО Экспорт Б".encode() not in csv.content
 
     def test_archive_via_http_and_current_selection(self, client):
-        resp = client.post("/legal-entities/new", data={"full_name": "ООО Архив"})
+        resp = client.post("/legal-entities/new", data={"full_name": "ООО Архив"},
+                           follow_redirects=False)
+        assert resp.status_code == 303
         le_id = resp.headers["location"].rstrip("/").split("/")[-1]
         # выбор текущим (T2-07)
         sel = client.post(f"/legal-entities/{le_id}/select", follow_redirects=False)
         assert sel.status_code == 303
-        assert "saot_current_le" in "; ".join(client.cookies.keys()) or client.cookies.get("saot_current_le")
+        assert client.cookies.get("saot_current_le") == le_id
         header = client.get("/legal-entities/")
         assert "Текущее:" in header.text
         # архивирование

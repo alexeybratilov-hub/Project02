@@ -36,7 +36,22 @@
 | T1-10 | start.bat / stop.bat для portable-папки + инструкция Windows | blocked | ручная проверка на целевой Windows (зафиксировать результат) | скрипты `start.bat`/`stop.bat` созданы; **ручная проверка на целевой Windows не выполнена** — в среде разработки нет Windows. Точка продолжения: прогнать start.bat на Windows-машине и зафиксировать результат здесь |
 | T1-11 | pytest: инфраструктура (временная БД, TestClient) + тесты миграций, FK, аудита, бэкапа | done | `pytest -q` зелёный, результаты в TESTING.md | conftest: изолированная tmp_path-база со схемой Alembic + TestClient; 20 тестов, `python -m pytest` → **20 passed in 1.62s** (2026-10-22), результаты в TESTING.md §5.1 |
 
-## Этапы 2–5
+## Этап 2
+
+| ID | Задача | Статус | Критерий завершения | Результат проверки |
+|---|---|---|---|---|
+| T2-01 | Модель и миграция legal_entities (индексы inn+kpp, ogrn, status) | done | `alembic upgrade head` проходит; схема соответствует DATA_MODEL §1.1 | модель в 0001_base_schema; миграция 0002_legal_entity_indexes; тесты test_migrations (чистая/повторная база) |
+| T2-02 | Сервис CRUD + валидация ИНН/КПП/ОГРН + поиск дубликатов (409/warning) | done | создание/редактирование с русскими сообщениями об ошибках | `app/modules/legal_entities/service.py`; юнит-тесты TestCreate/TestUpdate/TestDuplicates — проходят (TESTING.md §5.1а) |
+| T2-03 | Архивирование вместо удаления с сохранением связей (D-009) | done | архив не удаляет связанные записи; восстановление из архива | тесты archive/restore; HTTP-сценарий test_archive_via_http_and_current_selection |
+| T2-04 | Аудит create/update/archive/import в транзакции изменения | done | записи audit_log после каждой операции | add_audit в service (тесты создания/rollback); import пишет action=import |
+| T2-05 | Страницы: список с поиском/фильтром, карточка, форма создания/редактирования | done | страницы отдаются, пустые состояния корректны | router.py + templates/legal_entities/*; тесты test_stage2_acceptance; ручная проверка §5.3 |
+| T2-06 | Импорт Excel: парсинг, маппинг заголовков, предпросмотр add/skip/update/reject, подтверждение/отмена (D-010) | done | отмена не меняет данные; подтверждение — одна транзакция | parse_import_file/preview_import/commit/cancel; тесты TestImport + сценарии 3–5 |
+| T2-07 | Выбор текущего юридического лица (cookie) | done | «Текущее» отображается в шапке после выбора | POST /{id}/select + cookie saot_current_le; тест и ручная проверка §5.3 (в рамках сессии браузера) |
+| T2-08 | Главная панель: фактические показатели, пустые состояния без фиктивных данных | done | при 0 записей — счётчик 0 и подсказка | виджет модуля + registry.widgets; тест test_dashboard_widget_zero_when_empty |
+| T2-09 | Экспорт xlsx/csv (BOM) c экранированием формульных инъекций, round-trip без потерь | done | экспорт→импорт сохраняет данные | app/core/excel.py; тесты export xlsx/csv+BOM, roundtrip, формулы (`=…`) → текстовые |
+| T2-10 | Регрессия этапа 1 не сломана | done | полный pytest зелёный | `python -m pytest` → **55 passed in 5.71s** (2026-10-23), TESTING.md §5.1а |
+
+## Этапы 3–5
 
 Задачи детализируются при переходе к этапу. Общие группы:
 

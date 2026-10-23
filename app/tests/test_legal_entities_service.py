@@ -225,7 +225,7 @@ class TestImport:
 
     def test_checksum_warning(self, session, tmp_path):
         path = _write(tmp_path, le.LE_HEADERS, [
-            ["ООО Контроль", None, "7701234560", None, None, None, None, None],
+            ["ООО Контроль", None, "7701234561", None, None, None, None, None],
         ])
         records, _ = le.parse_import_file(path)
         preview = le.preview_import(session, records)
