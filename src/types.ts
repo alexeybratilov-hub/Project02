@@ -135,7 +135,8 @@ export interface AuditLogItem {
     | 'employee_restore'
     | 'employee_import'
     | 'employment_history_close'
-    | 'employment_history_open';
+    | 'employment_history_open'
+    | 'integrity_check';
   changed_at: string;
   actor: string;
   before_data?: Record<string, any> | null;
@@ -265,5 +266,21 @@ export interface BackupManifest {
     employees: Employee[];
     employment_history?: EmploymentHistoryRecord[];
     audit_logs: AuditLogItem[];
+  };
+}
+
+export interface DataIntegrityReport {
+  valid: boolean;
+  timestamp: string;
+  errors: string[];
+  warnings: string[];
+  stats: {
+    legal_entities: number;
+    departments: number;
+    positions: number;
+    contingent: number;
+    employees: number;
+    employment_history: number;
+    audit_logs: number;
   };
 }

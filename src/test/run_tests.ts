@@ -1,4 +1,17 @@
 import assert from 'node:assert/strict';
+
+if (!globalThis.localStorage || typeof globalThis.localStorage.getItem !== 'function') {
+  const store = new Map<string, string>();
+  globalThis.localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => { store.set(k, String(v)); },
+    removeItem: (k: string) => { store.delete(k); },
+    clear: () => { store.clear(); },
+    key: (i: number) => Array.from(store.keys())[i] ?? null,
+    get length() { return store.size; },
+  } as any;
+}
+
 import {
   validateInn,
   validateKpp,
@@ -15,7 +28,7 @@ import {
   CONTINGENT_HEADERS,
 } from '../services/excel';
 
-console.log('--- ЗАПУСК АВТОМАТИЧЕСКИХ ТЕСТОВ САОТ (ЭТАП 2 И ЭТАП 3) ---');
+console.log('--- ЗАПУСК АВТОМАТИЧЕСКИХ ТЕСТОВ САОТ (ЭТАПЫ 2, 3, 4 И 5) ---');
 
 // 1. Validation tests
 console.log('[1/7] Тестирование валидации реквизитов (ИНН/КПП/ОГРН)...');
@@ -294,5 +307,109 @@ assert.equal(periods[0].end_date, '2024-06-01');
 assert.equal(periods[1].end_date, null);
 assert.equal(periods[1].department_id, 'dept-2');
 
-console.log('✅ ВСЕ ТЕСТЫ ЭТАПА 2, 3 И 4 УСПЕШНО ПРОЙДЕНЫ (13/13)!');
+// 14. Backup creation & restoration round-trip (FR-14, D-005, counts)
+console.log('[14/16] Тестирование полного резервного копирования и восстановления (FR-14)...');
+import { storage } from '../services/storage';
+
+// Seed test data in storage
+const testLe = storage.createLegalEntity({
+  full_name: 'Общество с ограниченной ответственностью «САОТ-Тест»',
+  short_name: 'ООО «САОТ-Тест»',
+  inn: '7707083893',
+  kpp: '770701001',
+  ogrn: '1027700132195',
+});
+const testDept = storage.createDepartment({
+  legal_entity_id: testLe.id,
+  name: 'Служба охраны труда',
+});
+const testPos = storage.createPosition('Специалист по охране труда');
+const testCont = storage.createContingentRecord({
+  legal_entity_id: testLe.id,
+  department_id: testDept.id,
+  position_id: testPos.id,
+  workplace_label: 'Кабинет №1',
+  medical_items_29n: ['Приложение 1, п. 4.1'],
+});
+const testEmp = storage.createEmployee({
+  legal_entity_id: testLe.id,
+  department_id: testDept.id,
+  position_id: testPos.id,
+  contingent_record_id: testCont.id,
+  last_name: 'Кузнецов',
+  first_name: 'Алексей',
+  middle_name: 'Сергеевич',
+  hire_date: '2023-03-01',
+  birth_date: '1990-07-15',
+  snils: '112-233-445 95',
+});
+
+// Create backup
+const backupJson = storage.createBackup('test-stage5');
+const manifest = JSON.parse(backupJson);
+assert.ok(manifest.id);
+assert.equal(manifest.counts.legal_entities >= 1, true);
+assert.equal(manifest.counts.departments >= 1, true);
+assert.equal(manifest.counts.positions >= 1, true);
+assert.equal(manifest.counts.contingent >= 1, true);
+assert.equal(manifest.counts.employees >= 1, true);
+assert.equal(manifest.counts.employment_history >= 1, true);
+
+// 15. Referential integrity verification (Scenario 18: Проверка связей после восстановления)
+console.log('[15/16] Тестирование проверки связей и целостности данных (Сценарий 18)...');
+// First, restore and check integrity report on clean data
+const reportAfterRestore = storage.restoreFromBackup(backupJson);
+assert.equal(reportAfterRestore.valid, true);
+assert.equal(reportAfterRestore.errors.length, 0);
+assert.ok(reportAfterRestore.stats.employees >= 1);
+
+// Now run standalone verifyDataIntegrity
+const cleanIntegrity = storage.verifyDataIntegrity();
+assert.equal(cleanIntegrity.valid, true);
+assert.equal(cleanIntegrity.errors.length, 0);
+
+// Test detection of broken links: artificially corrupt department_id of an employee
+const rawEmps = storage.getEmployeesRaw();
+const savedEmpDept = rawEmps[0].department_id;
+rawEmps[0].department_id = 'non-existent-dept-uuid';
+storage.saveEmployeesRaw(rawEmps);
+
+const brokenIntegrity = storage.verifyDataIntegrity();
+assert.equal(brokenIntegrity.valid, false);
+assert.ok(brokenIntegrity.errors.some(e => e.includes('несуществующее подразделение')));
+
+// Restore original department to return to clean state
+rawEmps[0].department_id = savedEmpDept;
+storage.saveEmployeesRaw(rawEmps);
+assert.equal(storage.verifyDataIntegrity().valid, true);
+
+// 16. Automatic backup triggers (auto-import, pre-restore, auto-daily)
+console.log('[16/16] Тестирование авто-резервного копирования (импорт, страховочная копия, суточная)...');
+const initialBackupsCount = storage.getBackupsList().length;
+
+// Pre-restore backup was generated in test 15
+assert.ok(storage.getBackupsList().some(b => b.label === 'pre-restore'));
+
+// Auto-backup on import
+storage.commitEmployeeImport(
+  [
+    {
+      legal_entity_id: testLe.id,
+      department_id: testDept.id,
+      position_id: testPos.id,
+      last_name: 'Фёдоров',
+      first_name: 'Дмитрий',
+      hire_date: '2024-01-10',
+    },
+  ],
+  'add'
+);
+assert.ok(storage.getBackupsList().some(b => b.label === 'auto-import-employees'));
+
+// Periodic auto-backup
+storage.checkPeriodicAutoBackup();
+assert.ok(storage.getBackupsList().some(b => b.label === 'auto-daily'));
+
+console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2, 3, 4 И 5 УСПЕШНО ПРОЙДЕНЫ (16/16)!');
+
 

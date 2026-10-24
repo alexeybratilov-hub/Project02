@@ -32,6 +32,7 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     refreshCurrentLe();
+    storage.checkPeriodicAutoBackup();
 
     const hash = window.location.hash.replace('#', '');
     if (hash) {

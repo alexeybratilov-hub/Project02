@@ -12,6 +12,7 @@ import {
   ShiftPattern,
   WorkConditionSubclass,
   ElectricalSafetyGroup,
+  DataIntegrityReport,
 } from '../types';
 import {
   normalizeText,
@@ -821,6 +822,9 @@ class StorageService {
     }>,
     mode: 'add' | 'update'
   ): { added: number; updated: number; skipped: number; rejected: number } {
+    if (records.length > 0) {
+      this.createBackup('auto-import-contingent');
+    }
     const all = [...this.getContingentRaw()];
     let added = 0;
     let updated = 0;
@@ -1234,6 +1238,9 @@ class StorageService {
     }>,
     mode: 'add' | 'update'
   ): { added: number; updated: number; skipped: number; rejected: number } {
+    if (records.length > 0) {
+      this.createBackup('auto-import-employees');
+    }
     const all = [...this.getEmployeesRaw()];
     const historyList = [...this.getEmploymentHistoryRaw()];
     let added = 0;
@@ -1371,6 +1378,9 @@ class StorageService {
     skipped: number;
     rejected: number;
   } {
+    if (records.length > 0) {
+      this.createBackup('auto-import-legal-entities');
+    }
     const all = [...this.getLegalEntitiesRaw()];
     let added = 0;
     let updated = 0;
@@ -1500,7 +1510,20 @@ class StorageService {
     return loadFromStorage<any[]>('saot_backups_list', []);
   }
 
-  public restoreFromBackup(backupJson: string): void {
+  public checkPeriodicAutoBackup(): void {
+    try {
+      const last = localStorage.getItem('saot_last_auto_backup');
+      const now = Date.now();
+      if (!last || now - Number(last) > 24 * 60 * 60 * 1000) {
+        this.createBackup('auto-daily');
+        localStorage.setItem('saot_last_auto_backup', String(now));
+      }
+    } catch {
+      // Ignore if localStorage unavailable
+    }
+  }
+
+  public restoreFromBackup(backupJson: string): DataIntegrityReport {
     const parsed = JSON.parse(backupJson);
     if (!parsed || !parsed.data) {
       throw new Error('Некорректный формат файла резервной копии.');
@@ -1530,14 +1553,190 @@ class StorageService {
       saveToStorage(STORAGE_KEYS.AUDIT_LOG, parsed.data.audit_logs);
     }
 
+    const integrityReport = this.verifyDataIntegrity();
+
     this.addAudit(
       'database',
       'local',
       'restore',
       null,
-      { backup_id: parsed.id, created_at: parsed.created_at },
+      {
+        backup_id: parsed.id,
+        created_at: parsed.created_at,
+        integrity_valid: integrityReport.valid,
+        integrity_errors: integrityReport.errors.length,
+      },
       'Восстановление из резервной копии'
     );
+
+    return integrityReport;
+  }
+
+  // --- Data Integrity Verification (Stage 5, FR-14, Scenario 18) ---
+  public verifyDataIntegrity(): DataIntegrityReport {
+    const les = this.getLegalEntitiesRaw();
+    const depts = this.getDepartmentsRaw();
+    const positions = this.getPositionsRaw();
+    const contingent = this.getContingentRaw();
+    const employees = this.getEmployeesRaw();
+    const history = this.getEmploymentHistoryRaw();
+    const logs = this.getAuditLogs();
+
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    const leMap = new Map(les.map(l => [l.id, l]));
+    const deptMap = new Map(depts.map(d => [d.id, d]));
+    const posMap = new Map(positions.map(p => [p.id, p]));
+    const contMap = new Map(contingent.map(c => [c.id, c]));
+    const empMap = new Map(employees.map(e => [e.id, e]));
+
+    // 1. Legal entities verification
+    const activeInnKpp = new Set<string>();
+    const activeOgrn = new Set<string>();
+    for (const le of les) {
+      if (!le.id || !le.full_name) {
+        errors.push(`Юридическое лицо с некорректным идентификатором или пустым наименованием (ID: ${le.id || 'отсутствует'}).`);
+      }
+      if (le.status === 'active') {
+        if (le.inn && le.kpp) {
+          const key = `${le.inn}_${le.kpp}`;
+          if (activeInnKpp.has(key)) {
+            errors.push(`Обнаружен дубликат активного юридического лица по ИНН/КПП: ${le.inn}/${le.kpp} («${le.full_name}»).`);
+          } else {
+            activeInnKpp.add(key);
+          }
+        }
+        if (le.ogrn) {
+          if (activeOgrn.has(le.ogrn)) {
+            errors.push(`Обнаружен дубликат активного юридического лица по ОГРН: ${le.ogrn} («${le.full_name}»).`);
+          } else {
+            activeOgrn.add(le.ogrn);
+          }
+        }
+      }
+    }
+
+    // 2. Departments verification (referential integrity & hierarchy cycle detection)
+    for (const d of depts) {
+      if (!d.legal_entity_id || !leMap.has(d.legal_entity_id)) {
+        errors.push(`Подразделение «${d.name}» (ID: ${d.id}) ссылается на несуществующее юридическое лицо (ID: ${d.legal_entity_id}).`);
+      }
+      if (d.parent_id) {
+        const parent = deptMap.get(d.parent_id);
+        if (!parent) {
+          errors.push(`Подразделение «${d.name}» (ID: ${d.id}) ссылается на несуществующее родительское подразделение (ID: ${d.parent_id}).`);
+        } else if (parent.legal_entity_id !== d.legal_entity_id) {
+          errors.push(`Подразделение «${d.name}» (ID: ${d.id}) и его родитель относятся к разным юридическим лицам.`);
+        }
+
+        // Cycle check
+        let curr: Department | undefined = parent;
+        const visited = new Set<string>([d.id]);
+        while (curr) {
+          if (visited.has(curr.id)) {
+            errors.push(`Обнаружен цикл в иерархии подразделений: «${d.name}» (ID: ${d.id}).`);
+            break;
+          }
+          visited.add(curr.id);
+          curr = curr.parent_id ? deptMap.get(curr.parent_id) : undefined;
+        }
+      }
+    }
+
+    // 3. Positions verification
+    for (const p of positions) {
+      if (!p.id || !p.name) {
+        errors.push(`Должность с пустым наименованием или ID (ID: ${p.id || 'отсутствует'}).`);
+      }
+    }
+
+    // 4. Contingent verification
+    for (const c of contingent) {
+      if (!c.legal_entity_id || !leMap.has(c.legal_entity_id)) {
+        errors.push(`Запись контингента (ID: ${c.id}) ссылается на несуществующее юридическое лицо (ID: ${c.legal_entity_id}).`);
+      }
+      const dept = deptMap.get(c.department_id);
+      if (!dept) {
+        errors.push(`Запись контингента (ID: ${c.id}) ссылается на несуществующее подразделение (ID: ${c.department_id}).`);
+      } else if (c.legal_entity_id && dept.legal_entity_id !== c.legal_entity_id) {
+        errors.push(`Запись контингента (ID: ${c.id}) ссылается на подразделение другого юридического лица.`);
+      }
+
+      if (!c.position_id || !posMap.has(c.position_id)) {
+        errors.push(`Запись контингента (ID: ${c.id}) ссылается на несуществующую должность (ID: ${c.position_id}).`);
+      }
+    }
+
+    // 5. Employees verification
+    for (const e of employees) {
+      if (!e.legal_entity_id || !leMap.has(e.legal_entity_id)) {
+        errors.push(`Работник «${e.last_name} ${e.first_name}» (ID: ${e.id}) ссылается на несуществующее юридическое лицо (ID: ${e.legal_entity_id}).`);
+      }
+      const dept = deptMap.get(e.department_id);
+      if (!dept) {
+        errors.push(`Работник «${e.last_name} ${e.first_name}» (ID: ${e.id}) ссылается на несуществующее подразделение (ID: ${e.department_id}).`);
+      } else if (e.legal_entity_id && dept.legal_entity_id !== e.legal_entity_id) {
+        errors.push(`Работник «${e.last_name} ${e.first_name}» (ID: ${e.id}) ссылается на подразделение другого юридического лица.`);
+      }
+
+      if (!e.position_id || !posMap.has(e.position_id)) {
+        errors.push(`Работник «${e.last_name} ${e.first_name}» (ID: ${e.id}) ссылается на несуществующую должность (ID: ${e.position_id}).`);
+      }
+
+      if (e.contingent_record_id) {
+        const cont = contMap.get(e.contingent_record_id);
+        if (!cont) {
+          errors.push(`Работник «${e.last_name} ${e.first_name}» (ID: ${e.id}) ссылается на несуществующую позицию контингента (ID: ${e.contingent_record_id}).`);
+        } else if (e.legal_entity_id && cont.legal_entity_id !== e.legal_entity_id) {
+          errors.push(`Работник «${e.last_name} ${e.first_name}» (ID: ${e.id}) привязан к позиции контингента другого юридического лица.`);
+        }
+      }
+    }
+
+    // 6. Employment history verification (D-005)
+    const empActiveHistoryCount = new Map<string, number>();
+    for (const h of history) {
+      if (!h.employee_id || !empMap.has(h.employee_id)) {
+        errors.push(`Запись истории перемещений (ID: ${h.id}) ссылается на несуществующего работника (ID: ${h.employee_id}).`);
+      }
+      if (h.department_id && !deptMap.has(h.department_id)) {
+        errors.push(`Запись истории (ID: ${h.id}) ссылается на несуществующее подразделение (ID: ${h.department_id}).`);
+      }
+      if (h.position_id && !posMap.has(h.position_id)) {
+        errors.push(`Запись истории (ID: ${h.id}) ссылается на несуществующую должность (ID: ${h.position_id}).`);
+      }
+      if (h.contingent_record_id && !contMap.has(h.contingent_record_id)) {
+        errors.push(`Запись истории (ID: ${h.id}) ссылается на несуществующую позицию контингента (ID: ${h.contingent_record_id}).`);
+      }
+      if (h.start_date && h.end_date && h.start_date > h.end_date) {
+        errors.push(`В истории перемещений (ID: ${h.id}) дата начала ${h.start_date} позже даты окончания ${h.end_date}.`);
+      }
+
+      if (h.end_date === null) {
+        const count = (empActiveHistoryCount.get(h.employee_id) || 0) + 1;
+        empActiveHistoryCount.set(h.employee_id, count);
+        if (count > 1) {
+          warnings.push(`У работника ID: ${h.employee_id} обнаружено более одного открытого периода в истории перемещений.`);
+        }
+      }
+    }
+
+    return {
+      valid: errors.length === 0,
+      timestamp: nowISO(),
+      errors,
+      warnings,
+      stats: {
+        legal_entities: les.length,
+        departments: depts.length,
+        positions: positions.length,
+        contingent: contingent.length,
+        employees: employees.length,
+        employment_history: history.length,
+        audit_logs: logs.length,
+      },
+    };
   }
 }
 
