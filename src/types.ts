@@ -136,7 +136,13 @@ export interface AuditLogItem {
     | 'employee_import'
     | 'employment_history_close'
     | 'employment_history_open'
-    | 'integrity_check';
+    | 'integrity_check'
+    | 'sout_create'
+    | 'sout_update'
+    | 'sout_archive'
+    | 'sout_restore'
+    | 'sout_familiarize'
+    | 'sout_import';
   changed_at: string;
   actor: string;
   before_data?: Record<string, any> | null;
@@ -245,6 +251,109 @@ export interface EmployeeImportPreviewData {
   };
 }
 
+// ==============================
+// Модуль «СОУТ» (Этап 6+, 426-ФЗ)
+// ==============================
+
+export type SoutHarmfulFactorType =
+  | 'noise' // шум
+  | 'vibration_general' // общая вибрация
+  | 'vibration_local' // локальная вибрация
+  | 'chemical' // химический фактор
+  | 'microclimate' // микроклимат
+  | 'illumination' // освещённость
+  | 'gravity' // тяжесть трудового процесса
+  | 'stress' // напряжённость трудового процесса
+  | 'biological' // биологический фактор
+  | 'other'; // прочее
+
+export const SOUT_FACTOR_LABELS_RU: Record<SoutHarmfulFactorType, string> = {
+  noise: 'Шум',
+  vibration_general: 'Общая вибрация',
+  vibration_local: 'Локальная вибрация',
+  chemical: 'Химический фактор',
+  microclimate: 'Микроклимат',
+  illumination: 'Освещённость',
+  gravity: 'Тяжесть трудового процесса',
+  stress: 'Напряжённость трудового процесса',
+  biological: 'Биологический фактор',
+  other: 'Прочие факторы',
+};
+
+export interface SoutHarmfulFactor {
+  type: SoutHarmfulFactorType;
+  class: string; // класс условий труда по фактору: '1', '2', '3.1', '3.2', '3.3', '3.4', '4'
+  note?: string | null; // примечание (результаты измерений, ПДК/ПДУ и т.п.)
+}
+
+// Гарантии и компенсации по ТК РФ, назначаемые по итогам СОУТ
+export interface SoutGuarantees {
+  reduced_hours: boolean; // ст. 92 ТК РФ: сокращённая продолжительность рабочего времени (36 ч) — классы 3.3, 3.4, 4
+  extra_vacation_days: number; // ст. 117 ТК РФ: ежегодный дополнительный оплачиваемый отпуск, дней (>=7 для 3.2–4)
+  pay_increase_percent: number; // ст. 147 ТК РФ: повышенная оплата труда, % (не менее 4% для 3.1–4)
+  milk_issue: boolean; // ст. 222 ТК РФ: бесплатная выдача молока или равноценных продуктов
+  early_pension: boolean; // право на досрочное пенсионное обеспечение (Списки № 1/№ 2, п. 1 ст. 30 400-ФЗ)
+  ppe_issue: boolean; // обеспечение СИЗ (ст. 221 ТК РФ)
+}
+
+export interface SoutCard {
+  id: string;
+  card_number: string; // номер карты СОУТ
+  legal_entity_id: string;
+  department_id: string;
+  position_id: string;
+  workplace_label?: string | null; // уточнение рабочего места
+  is_analogous: boolean; // рабочее место признано аналогичным
+  analogous_basis?: string | null; // основание/реквизиты карты основного рабочего места
+  factors: SoutHarmfulFactor[]; // идентифицированные вредные и опасные производственные факторы
+  final_class: string; // итоговый класс условий труда: 1, 2, 3.1, 3.2, 3.3, 3.4, 4
+  employees_count: number; // численность занятых работников
+  women_count: number; // из них женщин
+  minors_count: number; // из них несовершеннолетних
+  disabled_count: number; // из них инвалидов
+  guarantees: SoutGuarantees;
+  measurement_org?: string | null; // организация, проводившая измерения
+  protocol_number?: string | null; // номер протокола исследований (испытаний) и измерений
+  report_approved_at?: string | null; // дата утверждения отчёта КОУТ (YYYY-MM-DD)
+  expires_at?: string | null; // плановая дата окончания действия (5 лет, ст. 8 426-ФЗ), пусто при бессрочной
+  declaration_active: boolean; // декларация соответствия условий труда зарегистрирована (ст. 11 426-ФЗ)
+  declaration_number?: string | null;
+  status: EntityStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SoutFamiliarization {
+  id: string;
+  sout_card_id: string;
+  employee_id: string;
+  signed_at: string; // YYYY-MM-DD — дата ознакомления под роспись (ст. 5 426-ФЗ)
+  comment?: string | null;
+  created_at: string;
+}
+
+export interface SoutImportRowResult {
+  row: number;
+  action: 'add' | 'update' | 'skip' | 'reject';
+  title: string;
+  errors: string[];
+  warnings: string[];
+  changes: string[];
+  data: Record<string, string>;
+}
+
+export interface SoutImportPreviewData {
+  results: SoutImportRowResult[];
+  structure_errors: string[];
+  summary: {
+    total: number;
+    add: number;
+    update: number;
+    skip: number;
+    reject: number;
+  };
+}
+
 export interface BackupManifest {
   id: string;
   created_at: string;
@@ -256,6 +365,8 @@ export interface BackupManifest {
     contingent: number;
     employees: number;
     employment_history?: number;
+    sout_cards?: number;
+    sout_familiarizations?: number;
     audit_logs: number;
   };
   data: {
@@ -265,6 +376,8 @@ export interface BackupManifest {
     contingent: ContingentRecord[];
     employees: Employee[];
     employment_history?: EmploymentHistoryRecord[];
+    sout_cards?: SoutCard[];
+    sout_familiarizations?: SoutFamiliarization[];
     audit_logs: AuditLogItem[];
   };
 }
@@ -281,6 +394,8 @@ export interface DataIntegrityReport {
     contingent: number;
     employees: number;
     employment_history: number;
+    sout_cards: number;
+    sout_familiarizations: number;
     audit_logs: number;
   };
 }

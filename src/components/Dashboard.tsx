@@ -13,6 +13,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const contingentArchived = contingentRaw.filter(c => c.status === 'archived').length;
   const employeesCount = storage.getEmployeesRaw().filter(e => e.status === 'active').length;
 
+  const soutEnabled = storage.isModuleEnabled('sout');
+  const soutCardsRaw = soutEnabled ? storage.getSoutCardsRaw() : [];
+  const soutActive = soutCardsRaw.filter(c => c.status === 'active');
+  const soutHarmful = soutActive.filter(c => ['3.1', '3.2', '3.3', '3.4', '4'].includes(c.final_class)).length;
+
   const widgets = [
     {
       id: 'legal_entities',
@@ -38,6 +43,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
       empty_hint: 'Пока нет работников — добавьте первого или импортируйте из Excel.',
       onClick: () => onNavigate('employees'),
     },
+    ...(soutEnabled
+      ? [
+          {
+            id: 'sout',
+            title: 'СОУТ (426-ФЗ)',
+            value: soutActive.length,
+            caption: `карт; вредные/опасные условия (3.x–4): ${soutHarmful}`,
+            empty_hint: 'Пока нет карт СОУТ — создайте первую или импортируйте из Excel.',
+            onClick: () => onNavigate('sout'),
+          },
+        ]
+      : []),
   ];
 
   return (
