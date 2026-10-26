@@ -22,6 +22,14 @@ import {
   OprMeasureItem,
   RiskLevel,
   RISK_LEVEL_LABELS_RU,
+  MedicalExaminationCard,
+  MedicalExamType,
+  MedicalConclusion,
+  MEDICAL_EXAM_TYPE_LABELS_RU,
+  MEDICAL_CONCLUSION_LABELS_RU,
+  PsychiatricExamination,
+  PsychiatricConclusion,
+  PSYCHIATRIC_CONCLUSION_LABELS_RU,
 } from '../types';
 import {
   normalizeText,
@@ -53,6 +61,8 @@ const STORAGE_KEYS = {
   SOUT_FAMILIARIZATIONS: 'saot_sout_familiarizations',
   OPR_CARDS: 'saot_opr_cards',
   OPR_MEASURES: 'saot_opr_measures',
+  MEDICAL_CARDS: 'saot_medical_cards',
+  PSYCHIATRIC_EXAMS: 'saot_psychiatric_exams',
 };
 
 
@@ -168,6 +178,15 @@ const DEFAULT_MODULES: ModuleItem[] = [
     version: '1.0.0',
     enabled: false,
     requires_core: ['db', 'legal_entities', 'contingent'],
+  },
+  {
+    module_id: 'medical',
+    title: 'Медосмотры и психиатрическое освидетельствование',
+    description:
+      'Учёт карт предварительных и периодических медосмотров (Приказ Минздрава 29н), актов психиатрического освидетельствования (Приказ Минздрава 342н), контроль сроков действия заключений, связь с контингентом и картами СОУТ, импорт/экспорт.',
+    version: '1.0.0',
+    enabled: false,
+    requires_core: ['db', 'legal_entities', 'contingent', 'employees', 'sout'],
   },
 ];
 
@@ -2492,6 +2511,492 @@ class StorageService {
     this.addAudit('opr_measure', before.id, 'delete' as any, before, null, `Удаление мероприятия «${before.measure_title}»`);
   }
 
+  // ===============================================
+  // Модуль «Медосмотры и психиатрическое освидетельствование» (Этап 8, 29н/342н)
+  // ===============================================
+
+  public getMedicalCardsRaw(): MedicalExaminationCard[] {
+    return loadFromStorage<MedicalExaminationCard[]>(STORAGE_KEYS.MEDICAL_CARDS, []);
+  }
+
+  public saveMedicalCardsRaw(items: MedicalExaminationCard[]): void {
+    saveToStorage(STORAGE_KEYS.MEDICAL_CARDS, items);
+  }
+
+  public getPsychiatricExamsRaw(): PsychiatricExamination[] {
+    return loadFromStorage<PsychiatricExamination[]>(STORAGE_KEYS.PSYCHIATRIC_EXAMS, []);
+  }
+
+  public savePsychiatricExamsRaw(items: PsychiatricExamination[]): void {
+    saveToStorage(STORAGE_KEYS.PSYCHIATRIC_EXAMS, items);
+  }
+
+  private validateDateOrNull(value: string | null | undefined, fieldLabel: string): string | null {
+    if (value === undefined || value === null || value === '') return null;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      throw new Error(`${fieldLabel}: дата должна быть в формате ГГГГ-ММ-ДД.`);
+    }
+    const d = new Date(value + 'T00:00:00');
+    if (isNaN(d.getTime())) {
+      throw new Error(`${fieldLabel}: указана некорректная дата.`);
+    }
+    return value;
+  }
+
+  private validateMedicalRefs(data: {
+    legal_entity_id: string;
+    employee_id: string;
+    contingent_record_id?: string | null;
+    sout_card_id?: string | null;
+  }): void {
+    if (!data.legal_entity_id) throw new Error('Юридическое лицо обязательно для заполнения.');
+    const le = this.getLegalEntityById(data.legal_entity_id);
+    if (!le) throw new Error('Юридическое лицо не найдено.');
+    if (!data.employee_id) throw new Error('Работник обязателен для заполнения.');
+    const emp = this.getEmployeeById(data.employee_id);
+    if (!emp) throw new Error('Работник не найден.');
+    if (emp.legal_entity_id !== data.legal_entity_id) {
+      throw new Error('Работник относится к другому юридическому лицу.');
+    }
+    if (data.contingent_record_id) {
+      const cr = this.getContingentRecordById(data.contingent_record_id);
+      if (!cr) throw new Error('Запись контингента не найдена.');
+      if (cr.legal_entity_id !== data.legal_entity_id) {
+        throw new Error('Запись контингента относится к другому юридическому лицу.');
+      }
+    }
+    if (data.sout_card_id) {
+      const sc = this.getSoutCardById(data.sout_card_id);
+      if (!sc) throw new Error('Карта СОУТ не найдена.');
+      if (sc.legal_entity_id !== data.legal_entity_id) {
+        throw new Error('Карта СОУТ относится к другому юридическому лицу.');
+      }
+    }
+  }
+
+  public listMedicalCards(params?: {
+    search?: string;
+    legal_entity_id?: string;
+    exam_type?: MedicalExamType;
+    conclusion?: MedicalConclusion;
+    overdue?: boolean;
+    status?: EntityStatus;
+    page?: number;
+    pageSize?: number;
+  }): { items: MedicalExaminationCard[]; total: number } {
+    const all = this.getMedicalCardsRaw();
+    const status = params?.status || 'active';
+    let filtered = all.filter(c => c.status === status);
+
+    if (params?.legal_entity_id) {
+      filtered = filtered.filter(c => c.legal_entity_id === params.legal_entity_id);
+    }
+    if (params?.exam_type) {
+      filtered = filtered.filter(c => c.exam_type === params.exam_type);
+    }
+    if (params?.conclusion) {
+      filtered = filtered.filter(c => c.conclusion === params.conclusion);
+    }
+    if (params?.overdue) {
+      const today = nowISO().split('T')[0];
+      filtered = filtered.filter(c => !!c.next_due_date && c.next_due_date < today);
+    }
+
+    const term = (params?.search || '').trim().toLowerCase();
+    if (term) {
+      const employees = this.getEmployeesRaw();
+      filtered = filtered.filter(c => {
+        const emp = employees.find(e => e.id === c.employee_id);
+        const fio = emp ? `${emp.last_name} ${emp.first_name} ${emp.middle_name || ''}` : '';
+        return (
+          c.card_number.toLowerCase().includes(term) ||
+          fio.toLowerCase().includes(term) ||
+          (c.clinic_name || '').toLowerCase().includes(term) ||
+          (c.doctor_fio || '').toLowerCase().includes(term)
+        );
+      });
+    }
+
+    filtered.sort((a, b) => ciCompare(a.card_number).localeCompare(ciCompare(b.card_number)));
+    const total = filtered.length;
+    const page = Math.max(1, params?.page || 1);
+    const pageSize = params?.pageSize || 30;
+    const start = (page - 1) * pageSize;
+    return { items: filtered.slice(start, start + pageSize), total };
+  }
+
+  public getMedicalCardById(id: string): MedicalExaminationCard | null {
+    return this.getMedicalCardsRaw().find(c => c.id === id) || null;
+  }
+
+  public createMedicalCard(data: {
+    card_number: string;
+    legal_entity_id: string;
+    employee_id: string;
+    contingent_record_id?: string | null;
+    sout_card_id?: string | null;
+    exam_type: MedicalExamType;
+    referral_date?: string | null;
+    exam_date?: string | null;
+    next_due_date?: string | null;
+    clinic_name?: string | null;
+    doctor_fio?: string | null;
+    conclusion: MedicalConclusion;
+    conclusion_details?: string | null;
+    contraindications_found?: boolean;
+  }): MedicalExaminationCard {
+    if (!this.isModuleEnabled('medical')) {
+      throw new Error('Модуль «Медосмотры» отключён. Включите модуль в реестре модулей.');
+    }
+    const card_number = normalizeText(data.card_number);
+    if (!card_number) throw new Error('Номер карты медосмотра обязателен для заполнения.');
+    if (!MEDICAL_EXAM_TYPE_LABELS_RU[data.exam_type]) {
+      throw new Error('Недопустимый вид медосмотра.');
+    }
+    if (!MEDICAL_CONCLUSION_LABELS_RU[data.conclusion]) {
+      throw new Error('Недопустимое заключение по результатам медосмотра.');
+    }
+
+    this.validateMedicalRefs(data);
+
+    const referralDate = this.validateDateOrNull(data.referral_date, 'Дата направления');
+    const examDate = this.validateDateOrNull(data.exam_date, 'Дата медосмотра');
+    const nextDueDate = this.validateDateOrNull(data.next_due_date, 'Срок следующего медосмотра');
+
+    if (referralDate && examDate && examDate < referralDate) {
+      throw new Error('Дата медосмотра не может быть раньше даты выдачи направления.');
+    }
+    if (examDate && nextDueDate && nextDueDate <= examDate) {
+      throw new Error('Срок следующего медосмотра должен быть позже даты пройденного медосмотра.');
+    }
+    if (data.conclusion !== 'pending' && !examDate) {
+      throw new Error('Укажите дату прохождения медосмотра для полученного заключения.');
+    }
+
+    const all = this.getMedicalCardsRaw();
+    const dup = all.find(
+      c => c.status === 'active' && c.legal_entity_id === data.legal_entity_id && ciCompare(c.card_number) === ciCompare(card_number)
+    );
+    if (dup) {
+      throw new Error(`Карта медосмотра № «${card_number}» уже зарегистрирована в данном юридическом лице.`);
+    }
+
+    const now = nowISO();
+    const card: MedicalExaminationCard = {
+      id: generateUUID(),
+      card_number,
+      legal_entity_id: data.legal_entity_id,
+      employee_id: data.employee_id,
+      contingent_record_id: data.contingent_record_id || null,
+      sout_card_id: data.sout_card_id || null,
+      exam_type: data.exam_type,
+      referral_date: referralDate,
+      exam_date: examDate,
+      next_due_date: nextDueDate,
+      clinic_name: normalizeText(data.clinic_name),
+      doctor_fio: normalizeText(data.doctor_fio),
+      conclusion: data.conclusion,
+      conclusion_details: normalizeText(data.conclusion_details),
+      contraindications_found: !!data.contraindications_found,
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    };
+
+    all.push(card);
+    this.saveMedicalCardsRaw(all);
+    this.addAudit('medical_card', card.id, 'medical_create' as any, null, { ...card }, `Создание карты медосмотра № ${card.card_number}`);
+    return card;
+  }
+
+  public updateMedicalCard(id: string, data: Partial<MedicalExaminationCard>): MedicalExaminationCard {
+    if (!this.isModuleEnabled('medical')) {
+      throw new Error('Модуль «Медосмотры» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getMedicalCardsRaw();
+    const index = all.findIndex(c => c.id === id);
+    if (index === -1) throw new Error('Карта медосмотра не найдена.');
+
+    const existing = all[index];
+    const before = { ...existing };
+
+    const mergedRefs = {
+      legal_entity_id: data.legal_entity_id || existing.legal_entity_id,
+      employee_id: data.employee_id || existing.employee_id,
+      contingent_record_id:
+        data.contingent_record_id !== undefined ? data.contingent_record_id : existing.contingent_record_id,
+      sout_card_id: data.sout_card_id !== undefined ? data.sout_card_id : existing.sout_card_id,
+    };
+    this.validateMedicalRefs(mergedRefs);
+
+    const card_number = data.card_number !== undefined ? normalizeText(data.card_number) : existing.card_number;
+    if (!card_number) throw new Error('Номер карты медосмотра обязателен для заполнения.');
+
+    if (data.exam_type !== undefined && !MEDICAL_EXAM_TYPE_LABELS_RU[data.exam_type]) {
+      throw new Error('Недопустимый вид медосмотра.');
+    }
+    const conclusion = data.conclusion !== undefined ? data.conclusion : existing.conclusion;
+    if (!MEDICAL_CONCLUSION_LABELS_RU[conclusion]) {
+      throw new Error('Недопустимое заключение по результатам медосмотра.');
+    }
+
+    const referralDate =
+      data.referral_date !== undefined ? this.validateDateOrNull(data.referral_date, 'Дата направления') : existing.referral_date || null;
+    const examDate =
+      data.exam_date !== undefined ? this.validateDateOrNull(data.exam_date, 'Дата медосмотра') : existing.exam_date || null;
+    const nextDueDate =
+      data.next_due_date !== undefined ? this.validateDateOrNull(data.next_due_date, 'Срок следующего медосмотра') : existing.next_due_date || null;
+
+    if (referralDate && examDate && examDate < referralDate) {
+      throw new Error('Дата медосмотра не может быть раньше даты выдачи направления.');
+    }
+    if (examDate && nextDueDate && nextDueDate <= examDate) {
+      throw new Error('Срок следующего медосмотра должен быть позже даты пройденного медосмотра.');
+    }
+    if (conclusion !== 'pending' && !examDate) {
+      throw new Error('Укажите дату прохождения медосмотра для полученного заключения.');
+    }
+
+    const dup = all.find(
+      c => c.id !== id && c.status === 'active' && c.legal_entity_id === mergedRefs.legal_entity_id && ciCompare(c.card_number) === ciCompare(card_number)
+    );
+    if (dup) {
+      throw new Error(`Карта медосмотра № «${card_number}» уже зарегистрирована в данном юридическом лице.`);
+    }
+
+    const updated: MedicalExaminationCard = {
+      ...existing,
+      ...mergedRefs,
+      card_number,
+      exam_type: data.exam_type !== undefined ? data.exam_type : existing.exam_type,
+      referral_date: referralDate,
+      exam_date: examDate,
+      next_due_date: nextDueDate,
+      clinic_name: data.clinic_name !== undefined ? normalizeText(data.clinic_name) : existing.clinic_name,
+      doctor_fio: data.doctor_fio !== undefined ? normalizeText(data.doctor_fio) : existing.doctor_fio,
+      conclusion,
+      conclusion_details:
+        data.conclusion_details !== undefined ? normalizeText(data.conclusion_details) : existing.conclusion_details,
+      contraindications_found:
+        data.contraindications_found !== undefined ? !!data.contraindications_found : existing.contraindications_found,
+      updated_at: nowISO(),
+    };
+
+    all[index] = updated;
+    this.saveMedicalCardsRaw(all);
+    this.addAudit('medical_card', updated.id, 'medical_update' as any, before, { ...updated }, `Обновление карты медосмотра № ${updated.card_number}`);
+    return updated;
+  }
+
+  public archiveMedicalCard(id: string): MedicalExaminationCard {
+    if (!this.isModuleEnabled('medical')) {
+      throw new Error('Модуль «Медосмотры» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getMedicalCardsRaw();
+    const index = all.findIndex(c => c.id === id);
+    if (index === -1) throw new Error('Карта медосмотра не найдена.');
+    const existing = all[index];
+    if (existing.status === 'archived') throw new Error('Карта медосмотра уже в архиве.');
+    const before = { ...existing };
+    existing.status = 'archived';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveMedicalCardsRaw(all);
+    this.addAudit('medical_card', existing.id, 'medical_archive' as any, before, { ...existing }, `Архивирование карты медосмотра № ${existing.card_number}`);
+    return existing;
+  }
+
+  public restoreMedicalCard(id: string): MedicalExaminationCard {
+    if (!this.isModuleEnabled('medical')) {
+      throw new Error('Модуль «Медосмотры» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getMedicalCardsRaw();
+    const index = all.findIndex(c => c.id === id);
+    if (index === -1) throw new Error('Карта медосмотра не найдена.');
+    const existing = all[index];
+    if (existing.status === 'active') throw new Error('Карта медосмотра уже активна.');
+    const before = { ...existing };
+    existing.status = 'active';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveMedicalCardsRaw(all);
+    this.addAudit('medical_card', existing.id, 'medical_restore' as any, before, { ...existing }, `Восстановление карты медосмотра № ${existing.card_number}`);
+    return existing;
+  }
+
+  // --- Акты психиатрического освидетельствования (342н) ---
+
+  public listPsychiatricExams(params?: {
+    search?: string;
+    legal_entity_id?: string;
+    conclusion?: PsychiatricConclusion;
+    expired?: boolean;
+    status?: EntityStatus;
+    page?: number;
+    pageSize?: number;
+  }): { items: PsychiatricExamination[]; total: number } {
+    const all = this.getPsychiatricExamsRaw();
+    const status = params?.status || 'active';
+    let filtered = all.filter(e => e.status === status);
+
+    if (params?.legal_entity_id) {
+      filtered = filtered.filter(e => e.legal_entity_id === params.legal_entity_id);
+    }
+    if (params?.conclusion) {
+      filtered = filtered.filter(e => e.conclusion === params.conclusion);
+    }
+    if (params?.expired) {
+      const today = nowISO().split('T')[0];
+      filtered = filtered.filter(e => !!e.valid_until && e.valid_until < today);
+    }
+
+    const term = (params?.search || '').trim().toLowerCase();
+    if (term) {
+      const employees = this.getEmployeesRaw();
+      filtered = filtered.filter(e => {
+        const emp = employees.find(x => x.id === e.employee_id);
+        const fio = emp ? `${emp.last_name} ${emp.first_name} ${emp.middle_name || ''}` : '';
+        return (
+          fio.toLowerCase().includes(term) ||
+          (e.conclusion_protocol_number || '').toLowerCase().includes(term) ||
+          (e.commission_members || '').toLowerCase().includes(term)
+        );
+      });
+    }
+
+    filtered.sort((a, b) => (b.exam_date || '').localeCompare(a.exam_date || ''));
+    const total = filtered.length;
+    const page = Math.max(1, params?.page || 1);
+    const pageSize = params?.pageSize || 30;
+    const start = (page - 1) * pageSize;
+    return { items: filtered.slice(start, start + pageSize), total };
+  }
+
+  public getPsychiatricExamById(id: string): PsychiatricExamination | null {
+    return this.getPsychiatricExamsRaw().find(e => e.id === id) || null;
+  }
+
+  public createPsychiatricExam(data: {
+    legal_entity_id: string;
+    employee_id: string;
+    exam_date?: string | null;
+    commission_members?: string | null;
+    conclusion: PsychiatricConclusion;
+    conclusion_protocol_number?: string | null;
+    valid_until?: string | null;
+    basis?: string | null;
+    comment?: string | null;
+  }): PsychiatricExamination {
+    if (!this.isModuleEnabled('medical')) {
+      throw new Error('Модуль «Медосмотры» отключён. Включите модуль в реестре модулей.');
+    }
+    if (!PSYCHIATRIC_CONCLUSION_LABELS_RU[data.conclusion]) {
+      throw new Error('Недопустимое заключение комиссии.');
+    }
+    const empOnlyRefs = { legal_entity_id: data.legal_entity_id, employee_id: data.employee_id };
+    this.validateMedicalRefs({ ...empOnlyRefs, contingent_record_id: null, sout_card_id: null });
+
+    const examDate = this.validateDateOrNull(data.exam_date, 'Дата освидетельствования');
+    const validUntil = this.validateDateOrNull(data.valid_until, 'Срок действия заключения');
+    if (examDate && validUntil && validUntil <= examDate) {
+      throw new Error('Срок действия заключения должен быть позже даты освидетельствования.');
+    }
+
+    const now = nowISO();
+    const item: PsychiatricExamination = {
+      id: generateUUID(),
+      legal_entity_id: data.legal_entity_id,
+      employee_id: data.employee_id,
+      exam_date: examDate,
+      commission_members: normalizeText(data.commission_members),
+      conclusion: data.conclusion,
+      conclusion_protocol_number: normalizeText(data.conclusion_protocol_number),
+      valid_until: validUntil,
+      basis: normalizeText(data.basis),
+      comment: normalizeText(data.comment),
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    };
+
+    const all = this.getPsychiatricExamsRaw();
+    all.push(item);
+    this.savePsychiatricExamsRaw(all);
+    this.addAudit('psychiatric_exam', item.id, 'psych_create' as any, null, { ...item }, 'Создание акта психиатрического освидетельствования');
+    return item;
+  }
+
+  public updatePsychiatricExam(id: string, data: Partial<PsychiatricExamination>): PsychiatricExamination {
+    if (!this.isModuleEnabled('medical')) {
+      throw new Error('Модуль «Медосмотры» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getPsychiatricExamsRaw();
+    const index = all.findIndex(e => e.id === id);
+    if (index === -1) throw new Error('Акт психиатрического освидетельствования не найден.');
+
+    const existing = all[index];
+    const before = { ...existing };
+
+    const mergedRefs = {
+      legal_entity_id: data.legal_entity_id || existing.legal_entity_id,
+      employee_id: data.employee_id || existing.employee_id,
+    };
+    this.validateMedicalRefs({ ...mergedRefs, contingent_record_id: null, sout_card_id: null });
+
+    const conclusion = data.conclusion !== undefined ? data.conclusion : existing.conclusion;
+    if (!PSYCHIATRIC_CONCLUSION_LABELS_RU[conclusion]) {
+      throw new Error('Недопустимое заключение комиссии.');
+    }
+
+    const examDate =
+      data.exam_date !== undefined ? this.validateDateOrNull(data.exam_date, 'Дата освидетельствования') : existing.exam_date || null;
+    const validUntil =
+      data.valid_until !== undefined ? this.validateDateOrNull(data.valid_until, 'Срок действия заключения') : existing.valid_until || null;
+    if (examDate && validUntil && validUntil <= examDate) {
+      throw new Error('Срок действия заключения должен быть позже даты освидетельствования.');
+    }
+
+    const updated: PsychiatricExamination = {
+      ...existing,
+      ...mergedRefs,
+      exam_date: examDate,
+      valid_until: validUntil,
+      conclusion,
+      commission_members:
+        data.commission_members !== undefined ? normalizeText(data.commission_members) : existing.commission_members,
+      conclusion_protocol_number:
+        data.conclusion_protocol_number !== undefined
+          ? normalizeText(data.conclusion_protocol_number)
+          : existing.conclusion_protocol_number,
+      basis: data.basis !== undefined ? normalizeText(data.basis) : existing.basis,
+      comment: data.comment !== undefined ? normalizeText(data.comment) : existing.comment,
+      updated_at: nowISO(),
+    };
+
+    all[index] = updated;
+    this.savePsychiatricExamsRaw(all);
+    this.addAudit('psychiatric_exam', updated.id, 'psych_update' as any, before, { ...updated }, 'Обновление акта психиатрического освидетельствования');
+    return updated;
+  }
+
+  public archivePsychiatricExam(id: string): PsychiatricExamination {
+    if (!this.isModuleEnabled('medical')) {
+      throw new Error('Модуль «Медосмотры» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getPsychiatricExamsRaw();
+    const index = all.findIndex(e => e.id === id);
+    if (index === -1) throw new Error('Акт психиатрического освидетельствования не найден.');
+    const existing = all[index];
+    if (existing.status === 'archived') throw new Error('Акт уже в архиве.');
+    const before = { ...existing };
+    existing.status = 'archived';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.savePsychiatricExamsRaw(all);
+    this.addAudit('psychiatric_exam', existing.id, 'psych_archive' as any, before, { ...existing }, 'Архивирование акта психиатрического освидетельствования');
+    return existing;
+  }
+
   // --- Backup & Restore ---
   public createBackup(label?: string): string {
     const manifest = {
@@ -2509,6 +3014,8 @@ class StorageService {
         sout_familiarizations: this.getSoutFamiliarizationsRaw().length,
         opr_cards: this.getOprCardsRaw().length,
         opr_measures: this.getOprMeasuresRaw().length,
+        medical_cards: this.getMedicalCardsRaw().length,
+        psychiatric_exams: this.getPsychiatricExamsRaw().length,
         audit_logs: this.getAuditLogs().length,
       },
       data: {
@@ -2522,6 +3029,8 @@ class StorageService {
         sout_familiarizations: this.getSoutFamiliarizationsRaw(),
         opr_cards: this.getOprCardsRaw(),
         opr_measures: this.getOprMeasuresRaw(),
+        medical_cards: this.getMedicalCardsRaw(),
+        psychiatric_exams: this.getPsychiatricExamsRaw(),
         audit_logs: this.getAuditLogs(),
       },
     };
@@ -2594,6 +3103,12 @@ class StorageService {
     if (Array.isArray(parsed.data.opr_measures)) {
       saveToStorage(STORAGE_KEYS.OPR_MEASURES, parsed.data.opr_measures);
     }
+    if (Array.isArray(parsed.data.medical_cards)) {
+      saveToStorage(STORAGE_KEYS.MEDICAL_CARDS, parsed.data.medical_cards);
+    }
+    if (Array.isArray(parsed.data.psychiatric_exams)) {
+      saveToStorage(STORAGE_KEYS.PSYCHIATRIC_EXAMS, parsed.data.psychiatric_exams);
+    }
     if (Array.isArray(parsed.data.audit_logs)) {
       saveToStorage(STORAGE_KEYS.AUDIT_LOG, parsed.data.audit_logs);
     }
@@ -2630,6 +3145,8 @@ class StorageService {
     const soutFam = this.getSoutFamiliarizationsRaw();
     const oprCards = this.getOprCardsRaw();
     const oprMeasures = this.getOprMeasuresRaw();
+    const medicalCards = this.getMedicalCardsRaw();
+    const psychExams = this.getPsychiatricExamsRaw();
     const logs = this.getAuditLogs();
 
     const errors: string[] = [];
@@ -2839,6 +3356,56 @@ class StorageService {
       }
     }
 
+    // 11. Медосмотры verification (Stage 8, module 'medical')
+    for (const c of medicalCards) {
+      if (!c.card_number) {
+        errors.push(`Карта медосмотра (ID: ${c.id}) имеет пустой номер карты.`);
+      }
+      if (!c.legal_entity_id || !leMap.has(c.legal_entity_id)) {
+        errors.push(`Карта медосмотра № «${c.card_number}» (ID: ${c.id}) ссылается на несуществующее юридическое лицо (ID: ${c.legal_entity_id}).`);
+      }
+      const emp = empMap.get(c.employee_id);
+      if (!emp) {
+        errors.push(`Карта медосмотра № «${c.card_number}» (ID: ${c.id}) ссылается на несуществующего работника (ID: ${c.employee_id}).`);
+      } else if (c.legal_entity_id && emp.legal_entity_id !== c.legal_entity_id) {
+        errors.push(`Карта медосмотра № «${c.card_number}» (ID: ${c.id}): работник относится к другому юридическому лицу.`);
+      }
+      if (c.contingent_record_id && !contMap.has(c.contingent_record_id)) {
+        errors.push(`Карта медосмотра № «${c.card_number}» (ID: ${c.id}) ссылается на несуществующую позицию контингента (ID: ${c.contingent_record_id}).`);
+      }
+      if (c.sout_card_id && !soutCardMap.has(c.sout_card_id)) {
+        errors.push(`Карта медосмотра № «${c.card_number}» (ID: ${c.id}) ссылается на несуществующую карту СОУТ (ID: ${c.sout_card_id}).`);
+      }
+      if (c.referral_date && c.exam_date && c.exam_date < c.referral_date) {
+        errors.push(`Карта медосмотра № «${c.card_number}» (ID: ${c.id}): дата медосмотра ${c.exam_date} раньше даты направления ${c.referral_date}.`);
+      }
+      if (c.exam_date && c.next_due_date && c.next_due_date <= c.exam_date) {
+        errors.push(`Карта медосмотра № «${c.card_number}» (ID: ${c.id}): срок следующего медосмотра ${c.next_due_date} не позже даты пройденного ${c.exam_date}.`);
+      }
+      if (c.conclusion === 'unfit') {
+        warnings.push(`Работник (карта медосмотра № «${c.card_number}», ID: ${c.id}) имеет заключение «Не годен» — требуется отстранение от работ.`);
+      }
+    }
+
+    // 12. Психиатрические освидетельствования verification (Stage 8, module 'medical')
+    for (const e of psychExams) {
+      if (!e.legal_entity_id || !leMap.has(e.legal_entity_id)) {
+        errors.push(`Акт психиатрического освидетельствования (ID: ${e.id}) ссылается на несуществующее юридическое лицо (ID: ${e.legal_entity_id}).`);
+      }
+      const emp = empMap.get(e.employee_id);
+      if (!emp) {
+        errors.push(`Акт психиатрического освидетельствования (ID: ${e.id}) ссылается на несуществующего работника (ID: ${e.employee_id}).`);
+      } else if (e.legal_entity_id && emp.legal_entity_id !== e.legal_entity_id) {
+        errors.push(`Акт психиатрического освидетельствования (ID: ${e.id}): работник относится к другому юридическому лицу.`);
+      }
+      if (e.exam_date && e.valid_until && e.valid_until <= e.exam_date) {
+        errors.push(`Акт психиатрического освидетельствования (ID: ${e.id}): срок действия ${e.valid_until} не позже даты освидетельствования ${e.exam_date}.`);
+      }
+      if (e.conclusion === 'unfit') {
+        warnings.push(`Работник (акт психиатрического освидетельствования ID: ${e.id}) имеет заключение «Не годен» — недопуск к соответствующим работам.`);
+      }
+    }
+
     return {
       valid: errors.length === 0,
       timestamp: nowISO(),
@@ -2855,6 +3422,8 @@ class StorageService {
         sout_familiarizations: soutFam.length,
         opr_cards: oprCards.length,
         opr_measures: oprMeasures.length,
+        medical_cards: medicalCards.length,
+        psychiatric_exams: psychExams.length,
         audit_logs: logs.length,
       },
     };

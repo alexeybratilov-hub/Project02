@@ -185,6 +185,58 @@
 
 В первой версии не создаётся. Архитектура должна допустить её добавление без переделки основных сущностей.
 
+### 1.14. `sout_cards` — карты СОУТ (Этап 6, 426-ФЗ)
+
+Реализовано в `src/types.ts` (`SoutCard`) и `src/services/storage.ts` (ключ LocalStorage `saot_sout_cards`).
+
+| Поле | Тип | Обяз. | Примечание |
+|---|---|---|---|
+| id | UUID | да | PK (D-012) |
+| card_number | string(100) | да | номер карты СОУТ, уникален в пределах юрлица |
+| legal_entity_id | UUID | да | FK → legal_entities |
+| department_id | UUID | да | FK → departments |
+| position_id | UUID | да | FK → positions |
+| workplace_label | string | нет | уточнение рабочего места |
+| is_analogous / analogous_basis | boolean / string | нет | признание аналогичным и основание |
+| factors | json (массив `SoutHarmfulFactor`) | да | вредные/опасные производственные факторы с классами |
+| final_class | string | да | итоговый класс условий труда (1, 2, 3.1–3.4, 4), авторасчёт по максимальному подклассу |
+| employees_count / women_count / minors_count / disabled_count | int | да | численность занятых (с разбивкой) |
+| guarantees | json (`SoutGuarantees`) | да | компенсации и гарантии по классу (ст. 7, 147 ТК РФ) |
+| measurement_org / protocol_number | string | нет | лаборатория и протокол измерений |
+| report_approved_at / expires_at | date | нет | утверждение отчёта КОУТ; плановая дата окончания (5 лет, ст. 8) |
+| declaration_active / declaration_number | boolean / string | нет | декларация соответствия (ст. 11) |
+| status | enum(`EntityStatus`) | да | active/archived (D-009) |
+| created_at / updated_at | datetime | да | |
+
+### 1.15. `sout_familiarizations` — ознакомления работников под роспись (Этап 6)
+
+Ключ `saot_sout_familiarizations`. Поля: `id` (UUID PK), `sout_card_id` (FK → sout_cards), `employee_id` (FK → employees), `signed_at` (date, ст. 5 426-ФЗ), `comment`, `created_at`.
+
+### 1.16. `opr_cards` — карты оценки профессиональных рисков (Этап 7, Приказ Минтруда 776н)
+
+Реализовано в `src/types.ts` (`OprCard`, `OprHazard`) и `src/services/storage.ts` (ключ `saot_opr_cards`).
+
+| Поле | Тип | Обяз. | Примечание |
+|---|---|---|---|
+| id | UUID | да | PK (D-012) |
+| card_number | string(100) | да | номер карты ОПР («ОПР-001»), уникален в пределах юрлица |
+| legal_entity_id / department_id / position_id | UUID | да | FK → legal_entities / departments / positions |
+| contingent_record_id | UUID | нет | FK → contingent_records |
+| workplace_label | string | нет | уточнение рабочего места |
+| assessment_date | date | нет | дата оценки |
+| assessment_method | string | да | «Матричный метод 5х5» / «Файна-Кинни» |
+| commission_members | string | нет | состав комиссии |
+| hazards | json (массив `OprHazard`) | да | идентифицированные опасности (каталог 776н — `DEFAULT_OPR_HAZARDS`) |
+| overall_risk_score / overall_risk_level | int / enum(`RiskLevel`) | да | авторасчёт по максимуму баллов опасностей (D-016) |
+| status | enum(`EntityStatus`) | да | active/archived (D-009) |
+| created_at / updated_at | datetime | да | |
+
+Структура `OprHazard`: `id`, `code` (шифр по каталогу 776н), `category`, `name`, `danger_source`, `severity` (1..5 — тяжесть последствий), `probability` (1..5 — вероятность), `risk_score` (= severity × probability, 1..25), `risk_level` (low <5, moderate 5–9, high 10–15, unacceptable ≥16), `existing_measures`, `recommended_measures`.
+
+### 1.17. `opr_measures` — план мероприятий по снижению рисков (Этап 7)
+
+Ключ `saot_opr_measures`. Поля: `id` (UUID PK), `opr_card_id` (FK → opr_cards), `hazard_id` (ссылка на опасность внутри карты), `measure_title` (обяз.), `deadline` (date), `responsible_person`, `status` (`planned` | `in_progress` | `completed`), `cost_estimate`, `comment`, `created_at`, `updated_at`.
+
 ## 2. Связи
 
 ```mermaid
@@ -203,9 +255,19 @@ erDiagram
     shift_patterns ||--o{ contingent_records : shift
     work_condition_subclasses ||--o{ contingent_records : subclass
     electrical_safety_groups ||--o{ contingent_records : group
+    legal_entities ||--o{ sout_cards : has
+    departments ||--o{ sout_cards : contains
+    positions ||--o{ sout_cards : classifies
+    sout_cards ||--o{ sout_familiarizations : has
+    employees ||--o{ sout_familiarizations : signs
+    legal_entities ||--o{ opr_cards : has
+    departments ||--o{ opr_cards : contains
+    positions ||--o{ opr_cards : classifies
+    contingent_records ||--o| opr_cards : relates
+    opr_cards ||--o{ opr_measures : plans
 ```
 
-Логическая цепочка: юридическое лицо → подразделение → должность и контингент → работники. Связи не обязательно один-к-одному.
+Логическая цепочка: юридическое лицо → подразделение → должность и контингент → работники; карты СОУТ/ОПР привязаны к тройке (юрлицо, подразделение, должность) и опционально к записи контингента. Связи не обязательно один-к-одному. Проверка ссылочной целостности внешних ключей карт СОУТ/ОПР и мероприятий плана выполняется в `verifyDataIntegrity()` (`src/services/storage.ts`).
 
 ## 3. Правила архивирования
 
