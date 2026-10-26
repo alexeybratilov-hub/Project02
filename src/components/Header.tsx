@@ -8,6 +8,7 @@ interface HeaderProps {
   onClearCurrentLe: () => void;
   soutEnabled?: boolean;
   oprEnabled?: boolean;
+  medicalEnabled?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -17,6 +18,7 @@ export const Header: React.FC<HeaderProps> = ({
   onClearCurrentLe,
   soutEnabled = true,
   oprEnabled = true,
+  medicalEnabled = true,
 }) => {
   return (
     <header>
@@ -81,6 +83,14 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={() => onNavigate('opr')}
           >
             ОПР
+          </button>
+        )}
+        {medicalEnabled && (
+          <button
+            className={currentView.startsWith('medical') ? 'active' : ''}
+            onClick={() => onNavigate('medical')}
+          >
+            Медосмотры
           </button>
         )}
         <button
