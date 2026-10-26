@@ -581,7 +581,8 @@ export interface MedicalImportRowResult {
   errors: string[];
   warnings: string[];
   changes: string[];
-  data: Record<string, string>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: Record<string, any>;
 }
 
 export interface MedicalImportPreviewData {

@@ -24,6 +24,13 @@ import {
   OprImportPreviewData,
   RiskLevel,
   RISK_LEVEL_LABELS_RU,
+  MedicalExaminationCard,
+  MedicalExamType,
+  MedicalConclusion,
+  MedicalImportRowResult,
+  MedicalImportPreviewData,
+  MEDICAL_EXAM_TYPE_LABELS_RU,
+  MEDICAL_CONCLUSION_LABELS_RU,
 } from '../types';
 import {
   validateInn,
@@ -1008,6 +1015,399 @@ export function generateOprPreview(
       }
 
       // Идентификация: номер карты ОПР уникален в пределах юридического лица
+      const existingMatch = existingCards.find(
+        c =>
+          c.status === 'active' &&
+          c.legal_entity_id === targetLe!.id &&
+          ciCompare(c.card_number) === ciCompare(cardNumber)
+      );
+
+      if (existingMatch) {
+        if (mode === 'update') {
+          res.action = 'update';
+          res.changes.push(`Карта № ${cardNumber} найдена в организации. Данные будут обновлены.`);
+        } else {
+          res.action = 'skip';
+          res.warnings.push(`Карта № ${cardNumber} уже существует в этой организации — строка будет пропущена.`);
+        }
+      } else {
+        res.action = 'add';
+      }
+    }
+
+    results.push(res);
+  });
+
+  const summary = {
+    total: results.length,
+    add: results.filter(r => r.action === 'add').length,
+    update: results.filter(r => r.action === 'update').length,
+    skip: results.filter(r => r.action === 'skip').length,
+    reject: results.filter(r => r.action === 'reject').length,
+  };
+
+  return {
+    results,
+    structure_errors: [],
+    summary,
+  };
+}
+
+// ===============================================
+// Модуль «Медосмотры» (Этап 8, Приказ Минздрава 29н)
+// ===============================================
+
+export const MEDICAL_HEADERS = [
+  'Юридическое лицо',
+  'Работник (ФИО)',
+  'СНИЛС работника',
+  'Номер карты медосмотра',
+  'Вид медосмотра',
+  'Дата направления',
+  'Дата медосмотра',
+  'Срок следующего медосмотра',
+  'Медицинская организация',
+  'Врач (ФИО)',
+  'Заключение',
+  'Подробности заключения / противопоказания',
+];
+
+export const MEDICAL_ALIASES: Record<string, string> = {
+  'юридическое лицо': 'legal_entity',
+  'юрлицо': 'legal_entity',
+  'организация': 'legal_entity',
+  'работник (фио)': 'employee_fio',
+  'работник фио': 'employee_fio',
+  'фио работника': 'employee_fio',
+  'фио': 'employee_fio',
+  'работник': 'employee_fio',
+  'снилс работника': 'employee_snils',
+  'снилс': 'employee_snils',
+  'номер карты медосмотра': 'card_number',
+  'номер карты': 'card_number',
+  '№ карты медосмотра': 'card_number',
+  '№ карты': 'card_number',
+  'карта медосмотра': 'card_number',
+  'вид медосмотра': 'exam_type',
+  'вид осмотра': 'exam_type',
+  'осмотр': 'exam_type',
+  'дата направления': 'referral_date',
+  'направление': 'referral_date',
+  'дата медосмотра': 'exam_date',
+  'дата осмотра': 'exam_date',
+  'срок следующего медосмотра': 'next_due_date',
+  'следующий медосмотр': 'next_due_date',
+  'срок следующего осмотра': 'next_due_date',
+  'медицинская организация': 'clinic_name',
+  'медорганизация': 'clinic_name',
+  'клиника': 'clinic_name',
+  'учреждение': 'clinic_name',
+  'врач (фио)': 'doctor_fio',
+  'врач фио': 'doctor_fio',
+  'врач': 'doctor_fio',
+  'заключение': 'conclusion',
+  'заключение по результатам': 'conclusion',
+  'подробности заключения / противопоказания': 'conclusion_details',
+  'подробности заключения': 'conclusion_details',
+  'противопоказания': 'conclusion_details',
+  'комментарий заключения': 'conclusion_details',
+};
+
+const MEDICAL_EXAM_TYPE_RU_TO_KEY: Record<string, MedicalExamType> = {
+  'предварительный': 'preliminary',
+  'предварительный (при поступлении на работу)': 'preliminary',
+  'предварительный при поступлении на работу': 'preliminary',
+  'периодический': 'periodic',
+  'предсменный': 'pre_shift',
+  'предрейсовый': 'pre_shift',
+  'предсменный (предрейсовый)': 'pre_shift',
+  'предсменный/предрейсовый': 'pre_shift',
+};
+
+const MEDICAL_CONCLUSION_RU_TO_KEY: Record<string, MedicalConclusion> = {
+  'годен': 'fit',
+  'допущен': 'fit',
+  'годен с ограничениями': 'fit_restrictions',
+  'допущен с ограничениями': 'fit_restrictions',
+  'не годен': 'unfit',
+  'не допущен': 'unfit',
+  'заключение не получено': 'pending',
+  'не получено': 'pending',
+  'ожидание': 'pending',
+};
+
+export function mapMedicalHeaders(rawHeaders: string[]): {
+  mapping: Record<number, string>;
+  problems: string[];
+} {
+  const mapping: Record<number, string> = {};
+  const problems: string[] = [];
+  const foundFields = new Set<string>();
+
+  rawHeaders.forEach((raw, idx) => {
+    const clean = String(raw || '').trim().toLowerCase();
+    if (MEDICAL_ALIASES[clean]) {
+      const field = MEDICAL_ALIASES[clean];
+      mapping[idx] = field;
+      foundFields.add(field);
+    }
+  });
+
+  const required = ['legal_entity', 'card_number', 'exam_type'];
+  for (const req of required) {
+    if (!foundFields.has(req)) {
+      problems.push(`Отсутствует обязательная колонка для сопоставления: «${req}»`);
+    }
+  }
+  if (!foundFields.has('employee_fio') && !foundFields.has('employee_snils')) {
+    problems.push('Отсутствуют обязательные колонки работника: «Работник (ФИО)» или «СНИЛС работника»');
+  }
+
+  return { mapping, problems };
+}
+
+function medicalCardToRow(c: MedicalExaminationCard): string[] {
+  const les = storage.listLegalEntities({ pageSize: 10000 }).items;
+  const emp = storage.getEmployeesRaw().find(e => e.id === c.employee_id);
+  const fio = emp ? `${emp.last_name} ${emp.first_name} ${emp.middle_name || ''}`.trim() : '';
+  const le = les.find(l => l.id === c.legal_entity_id);
+
+  return [
+    sanitizeCell(le?.full_name || ''),
+    sanitizeCell(fio),
+    sanitizeCell(emp?.snils || ''),
+    sanitizeCell(c.card_number),
+    sanitizeCell(MEDICAL_EXAM_TYPE_LABELS_RU[c.exam_type] || c.exam_type),
+    sanitizeCell(formatDateForDisplay(c.referral_date)),
+    sanitizeCell(formatDateForDisplay(c.exam_date)),
+    sanitizeCell(formatDateForDisplay(c.next_due_date)),
+    sanitizeCell(c.clinic_name || ''),
+    sanitizeCell(c.doctor_fio || ''),
+    sanitizeCell(MEDICAL_CONCLUSION_LABELS_RU[c.conclusion]?.name || c.conclusion),
+    sanitizeCell(c.conclusion_details || ''),
+  ];
+}
+
+export function exportMedicalToXLSX(cards: MedicalExaminationCard[], filename = 'medical_cards.xlsx'): void {
+  const rows: any[][] = [MEDICAL_HEADERS];
+  for (const c of cards) {
+    rows.push(medicalCardToRow(c));
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = MEDICAL_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 18) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Карты медосмотров');
+  XLSX.writeFile(wb, filename);
+}
+
+export function exportMedicalToCSV(cards: MedicalExaminationCard[], filename = 'medical_cards.csv'): void {
+  const lines: string[] = [];
+  lines.push(MEDICAL_HEADERS.map(h => `"${h.replace(/"/g, '""')}"`).join(';'));
+  for (const c of cards) {
+    const row = medicalCardToRow(c);
+    lines.push(row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(';'));
+  }
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function downloadMedicalTemplate(): void {
+  const exampleRow = [
+    'ООО Ромашка',
+    'Иванов Иван Иванович',
+    '112-003-456 78',
+    'МЕД-001',
+    'Периодический',
+    '15.02.2024',
+    '01.03.2024',
+    '01.03.2026',
+    'ГБУЗ «Центр профпатологии»',
+    'Петрова А.С.',
+    'Годен',
+    '',
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([MEDICAL_HEADERS, exampleRow]);
+  ws['!cols'] = MEDICAL_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 18) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Карты медосмотров');
+  XLSX.writeFile(wb, 'template_medical.xlsx');
+}
+
+export function generateMedicalPreview(
+  rawRows: any[][],
+  mapping: Record<number, string>,
+  existingCards: MedicalExaminationCard[],
+  mode: 'add' | 'update'
+): MedicalImportPreviewData {
+  const results: MedicalImportRowResult[] = [];
+  const les = storage.listLegalEntities({ pageSize: 10000 }).items;
+  const employees = storage.getEmployeesRaw();
+
+  rawRows.forEach((row, i) => {
+    const rowNum = i + 2;
+    const rec: Record<string, any> = {};
+
+    Object.entries(mapping).forEach(([colIdx, key]) => {
+      const idx = parseInt(colIdx, 10);
+      rec[key] = row[idx];
+    });
+
+    const leQuery = String(rec.legal_entity || '').trim();
+    const fioQuery = String(rec.employee_fio || '').trim();
+    const snilsQuery = normalizeSnils(String(rec.employee_snils || '').trim());
+    const cardNumber = String(rec.card_number || '').trim();
+    const examTypeRaw = String(rec.exam_type || '').trim();
+    const clinicName = String(rec.clinic_name || '').trim();
+    const doctorFio = String(rec.doctor_fio || '').trim();
+    const conclusionRaw = String(rec.conclusion || '').trim();
+    const details = String(rec.conclusion_details || '').trim();
+
+    const title = cardNumber ? `Карта медосмотра № ${cardNumber}` : '(без номера)';
+
+    const res: MedicalImportRowResult = {
+      row: rowNum,
+      action: 'add',
+      title,
+      errors: [],
+      warnings: [],
+      changes: [],
+      data: {
+        legal_entity_name: leQuery,
+        employee_fio: fioQuery,
+        employee_snils: snilsQuery || '',
+        card_number: cardNumber,
+        exam_type_raw: examTypeRaw,
+        clinic_name: clinicName,
+        doctor_fio: doctorFio,
+        conclusion_raw: conclusionRaw,
+        conclusion_details: details,
+      },
+    };
+
+    if (!leQuery) res.errors.push('Не указано юридическое лицо.');
+    if (!cardNumber) res.errors.push('Не указан номер карты медосмотра.');
+    if (!fioQuery && !snilsQuery) res.errors.push('Укажите ФИО или СНИЛС работника.');
+
+    // Вид медосмотра
+    const examTypeKey = examTypeRaw
+      ? MEDICAL_EXAM_TYPE_RU_TO_KEY[examTypeRaw.toLowerCase().replace(/\s+/g, ' ').trim()]
+      : undefined;
+    if (!examTypeRaw) {
+      res.errors.push('Не указан вид медосмотра.');
+    } else if (!examTypeKey) {
+      res.errors.push(`Недопустимый вид медосмотра «${examTypeRaw}». Допустимы: Предварительный, Периодический, Предсменный (предрейсовый).`);
+    } else {
+      res.data.exam_type = examTypeKey;
+    }
+
+    // Заключение
+    let conclusionKey: MedicalConclusion | undefined;
+    if (conclusionRaw) {
+      conclusionKey = MEDICAL_CONCLUSION_RU_TO_KEY[conclusionRaw.toLowerCase().replace(/\s+/g, ' ').trim()];
+      if (!conclusionKey) {
+        res.errors.push(`Недопустимое заключение «${conclusionRaw}». Допустимы: Годен, Годен с ограничениями, Не годен, Заключение не получено.`);
+      } else {
+        res.data.conclusion = conclusionKey;
+      }
+    } else {
+      conclusionKey = 'pending';
+      res.data.conclusion = 'pending';
+      res.warnings.push('Заключение не указано — будет установлено «Заключение не получено».');
+    }
+
+    // Даты
+    const dateFields: Array<[string, string]> = [
+      ['referral_date', 'Дата направления'],
+      ['exam_date', 'Дата медосмотра'],
+      ['next_due_date', 'Срок следующего медосмотра'],
+    ];
+    for (const [field, label] of dateFields) {
+      const rawVal = rec[field];
+      if (rawVal !== undefined && String(rawVal).trim() !== '') {
+        const parsed = parseExcelDate(rawVal);
+        if (!parsed) {
+          res.errors.push(`${label}: не удалось распознать дату «${rawVal}» (ожидается ГГГГ-ММ-ДД или ДД.ММ.ГГГГ).`);
+        } else if (field !== 'next_due_date') {
+          try {
+            validateDateNotFuture(parsed, label);
+            res.data[field] = parsed;
+          } catch (e: any) {
+            res.errors.push(e.message);
+          }
+        } else {
+          res.data[field] = parsed;
+        }
+      }
+    }
+
+    const examDateVal = res.data.exam_date;
+    const referralVal = res.data.referral_date;
+    const nextDueVal = res.data.next_due_date;
+    if (referralVal && examDateVal && examDateVal < referralVal) {
+      res.errors.push('Дата медосмотра раньше даты выдачи направления.');
+    }
+    if (examDateVal && nextDueVal && nextDueVal <= examDateVal) {
+      res.errors.push('Срок следующего медосмотра должен быть позже даты пройденного медосмотра.');
+    }
+    if (conclusionKey && conclusionKey !== 'pending' && !examDateVal) {
+      res.errors.push('Для полученного заключения обязательна дата медосмотра.');
+    }
+
+    // Сопоставление юридического лица
+    let targetLe: LegalEntity | undefined;
+    if (leQuery) {
+      targetLe = les.find(
+        l =>
+          l.status === 'active' &&
+          (l.inn === leQuery ||
+            ciCompare(l.full_name) === ciCompare(leQuery) ||
+            ciCompare(l.short_name || '') === ciCompare(leQuery))
+      );
+      if (!targetLe) {
+        res.errors.push(`Юридическое лицо «${leQuery}» не найдено в базе.`);
+      }
+    }
+
+    // Сопоставление работника
+    if (targetLe && (fioQuery || snilsQuery)) {
+      const leEmployees = employees.filter(e => e.status === 'active' && e.legal_entity_id === targetLe!.id);
+      let matched: Employee[] = [];
+      if (snilsQuery) {
+        matched = leEmployees.filter(e => normalizeSnils(e.snils || '') === snilsQuery);
+      }
+      if (matched.length === 0 && fioQuery) {
+        const needle = ciCompare(fioQuery);
+        matched = leEmployees.filter(e => {
+          const fio = `${e.last_name} ${e.first_name} ${e.middle_name || ''}`.trim();
+          const fioShort = `${e.last_name} ${e.first_name.charAt(0)}${e.middle_name ? '.' + e.middle_name.charAt(0) : ''}`.trim();
+          return ciCompare(fio) === needle || ciCompare(fioShort) === needle;
+        });
+      }
+      if (matched.length === 0) {
+        res.errors.push(`Работник «${fioQuery || 'СНИЛС ' + snilsQuery}» не найден в организации.`);
+      } else {
+        if (matched.length > 1) {
+          res.warnings.push(`Найдено несколько работников с таким ФИО — выбран первый (${matched[0].last_name} ${matched[0].first_name}). Уточните импорт через СНИЛС.`);
+        }
+        res.data.employee_id = matched[0].id;
+      }
+    }
+
+    if (res.errors.length > 0) {
+      res.action = 'reject';
+      results.push(res);
+      return;
+    }
+
+    if (targetLe) {
+      // Идентификация: номер карты уникален в пределах юридического лица
       const existingMatch = existingCards.find(
         c =>
           c.status === 'active' &&
