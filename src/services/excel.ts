@@ -209,6 +209,451 @@ export function downloadEmployeeTemplate(): void {
   XLSX.writeFile(wb, 'template_employees.xlsx');
 }
 
+// ==============================
+// СОУТ (Этап 6, 426-ФЗ): заголовки, алиасы, шаблон, импорт/экспорт
+// ==============================
+
+// 18 колонок согласно IMPORT_EXPORT.md и промпту Этапа 6
+export const SOUT_HEADERS = [
+  'Юридическое лицо',
+  'Структурное подразделение',
+  'Должность',
+  'Номер карты СОУТ',
+  'Рабочее место (уточнение)',
+  'Аналогичное рабочее место',
+  'Основание аналогичности',
+  'Вредные факторы',
+  'Класс условий труда',
+  'Занятых работников',
+  'Из них женщин',
+  'Из них несовершеннолетних',
+  'Из них инвалидов',
+  'Организация, проводившая измерения',
+  'Номер протокола измерений',
+  'Дата утверждения отчёта',
+  'Декларация соответствия',
+  'Номер декларации',
+];
+
+export const SOUT_ALIASES: Record<string, string> = {
+  'юридическое лицо': 'legal_entity',
+  'юрлицо': 'legal_entity',
+  'организация': 'legal_entity',
+  'структурное подразделение': 'department',
+  'подразделение': 'department',
+  'отдел': 'department',
+  'цех': 'department',
+  'должность': 'position',
+  'профессия': 'position',
+  'номер карты соут': 'card_number',
+  'карта соут': 'card_number',
+  '№ карты соут': 'card_number',
+  'рабочее место (уточнение)': 'workplace_label',
+  'рабочее место': 'workplace_label',
+  'уточнение рабочего места': 'workplace_label',
+  'аналогичное рабочее место': 'is_analogous',
+  'аналогично': 'is_analogous',
+  'основание аналогичности': 'analogous_basis',
+  'вредные факторы': 'factors',
+  'факторы': 'factors',
+  'класс условий труда': 'final_class',
+  'класс соут': 'final_class',
+  'итоговый класс': 'final_class',
+  'занятых работников': 'employees_count',
+  'численность занятых': 'employees_count',
+  'из них женщин': 'women_count',
+  'женщин': 'women_count',
+  'из них несовершеннолетних': 'minors_count',
+  'несовершеннолетних': 'minors_count',
+  'из них инвалидов': 'disabled_count',
+  'инвалидов': 'disabled_count',
+  'организация, проводившая измерения': 'measurement_org',
+  'лаборатория': 'measurement_org',
+  'номер протокола измерений': 'protocol_number',
+  'протокол': 'protocol_number',
+  'дата утверждения отчёта': 'report_approved_at',
+  'утверждение отчёта': 'report_approved_at',
+  'декларация соответствия': 'declaration_active',
+  'декларация': 'declaration_active',
+  'номер декларации': 'declaration_number',
+};
+
+const SOUT_FACTOR_ALIAS_TO_TYPE: Record<string, SoutHarmfulFactorType> = (() => {
+  const map: Record<string, SoutHarmfulFactorType> = {};
+  (Object.keys(SOUT_FACTOR_LABELS_RU) as SoutHarmfulFactorType[]).forEach(t => {
+    map[normalizeHeaderLocal(SOUT_FACTOR_LABELS_RU[t])] = t;
+  });
+  // дополнительные синонимы
+  map['вибрация'] = 'vibration_general';
+  map['химия'] = 'chemical';
+  map['тяжесть'] = 'gravity';
+  map['напряженность'] = 'stress';
+  map['напряжённость'] = 'stress';
+  return map;
+})();
+
+function normalizeHeaderLocal(h: string): string {
+  return String(h || '').toLowerCase().trim().replace(/ё/g, 'е').replace(/\s+/g, ' ');
+}
+
+export function downloadSoutTemplate(): void {
+  const exampleRow = [
+    'ООО Ромашка',
+    'Производственный цех',
+    'Станочник',
+    'СОУТ-001',
+    'Станок №3',
+    'нет',
+    '',
+    'Шум:3.2; Вибрация локальная:3.1',
+    '3.2',
+    '5',
+    '1',
+    '0',
+    '0',
+    'АО «Профлаборатория»',
+    'Пр-123/2024',
+    '01.03.2024',
+    'нет',
+    '',
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([SOUT_HEADERS, exampleRow]);
+  ws['!cols'] = SOUT_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 16) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Карты СОУТ');
+  XLSX.writeFile(wb, 'template_sout.xlsx');
+}
+
+export function mapSoutHeaders(
+  headers: string[]
+): { mapping: Record<number, string>; problems: string[] } {
+  const mapping: Record<number, string> = {};
+  const problems: string[] = [];
+  const used = new Set<string>();
+
+  headers.forEach((h, idx) => {
+    const norm = normalizeHeader(h);
+    if (!norm) return;
+    const key = SOUT_ALIASES[norm];
+    if (key) {
+      if (used.has(key)) {
+        problems.push(`Столбец «${h}» повторяется — лишние столбцы игнорируются.`);
+      } else {
+        used.add(key);
+        mapping[idx] = key;
+      }
+    } else {
+      problems.push(`Неизвестный столбец «${h}» — будет пропущен.`);
+    }
+  });
+
+  const required: Array<[string, string]> = [
+    ['legal_entity', 'Юридическое лицо'],
+    ['department', 'Структурное подразделение'],
+    ['position', 'Должность'],
+    ['card_number', 'Номер карты СОУТ'],
+    ['final_class', 'Класс условий труда'],
+  ];
+  for (const [key, label] of required) {
+    if (!used.has(key)) {
+      problems.unshift(`Отсутствует обязательный столбец «${label}».`);
+    }
+  }
+
+  return { mapping, problems };
+}
+
+// Разбор строки факторов вида "Шум:3.2; Химический фактор:3.1" или "Шум, вибрация"
+export function parseSoutFactors(raw: string | undefined): { factors: SoutHarmfulFactor[]; errors: string[] } {
+  const factors: SoutHarmfulFactor[] = [];
+  const errors: string[] = [];
+  const s = String(raw || '').trim();
+  if (!s) return { factors, errors };
+
+  const parts = s.split(/[;,\n]+/).map(p => p.trim()).filter(Boolean);
+  for (const part of parts) {
+    const m = /^(.+?)\s*[:\-–]\s*(\d(?:\.\d)?|оптимальны\w*|допустим\w*)$/i.exec(part);
+    let factorText = part;
+    let classText = '';
+    if (m) {
+      factorText = m[1].trim();
+      classText = m[2].trim();
+    }
+    const typeKey = normalizeHeaderLocal(factorText);
+    const type = SOUT_FACTOR_ALIAS_TO_TYPE[typeKey];
+    if (!type) {
+      errors.push(`Неизвестный вредный фактор «${factorText}» (строка факторов: «${part}»).`);
+      continue;
+    }
+    let cls = classText.replace(',', '.');
+    if (!cls || /^(оптимальн|допустим)/i.test(cls)) {
+      cls = /^оптимальн/i.test(cls) ? '1' : '2';
+    }
+    if (!StorageServiceValidClasses.includes(cls)) {
+      errors.push(`Недопустимый класс «${classText}» для фактора «${factorText}». Допустимы: ${StorageServiceValidClasses.join(', ')}.`);
+      continue;
+    }
+    factors.push({ type, class: cls, note: null });
+  }
+  return { factors, errors };
+}
+
+const StorageServiceValidClasses = ['1', '2', '3.1', '3.2', '3.3', '3.4', '4'];
+
+function parseYesNo(val: any): boolean {
+  const s = normalizeHeaderLocal(String(val ?? ''));
+  return ['да', 'yes', '1', 'true', 'истина', '+'].includes(s);
+}
+
+export function generateSoutPreview(
+  rawRows: any[][],
+  mapping: Record<number, string>,
+  existingCards: SoutCard[],
+  mode: 'add' | 'update'
+): SoutImportPreviewData {
+  const results: SoutImportRowResult[] = [];
+  const les = storage.listLegalEntities({ pageSize: 10000 }).items;
+  const depts = storage.getDepartmentsRaw();
+  const positions = storage.getPositionsRaw();
+
+  rawRows.forEach((row, i) => {
+    const rowNum = i + 2;
+    const rec: Record<string, any> = {};
+
+    Object.entries(mapping).forEach(([colIdx, key]) => {
+      const idx = parseInt(colIdx, 10);
+      rec[key] = row[idx];
+    });
+
+    const leQuery = String(rec.legal_entity || '').trim();
+    const deptQuery = String(rec.department || '').trim();
+    const posQuery = String(rec.position || '').trim();
+    const cardNumber = String(rec.card_number || '').trim();
+    const classRaw = String(rec.final_class || '').trim().replace(',', '.');
+    const label = String(rec.workplace_label || '').trim();
+
+    const title = cardNumber ? `Карта № ${cardNumber}` : '(без номера)';
+
+    const res: SoutImportRowResult = {
+      row: rowNum,
+      action: 'add',
+      title,
+      errors: [],
+      warnings: [],
+      changes: [],
+      data: {
+        legal_entity_name: leQuery,
+        department_name: deptQuery,
+        position_name: posQuery,
+        card_number: cardNumber,
+        workplace_label: label,
+        final_class: classRaw,
+        factors_raw: String(rec.factors || '').trim(),
+      },
+    };
+
+    if (!leQuery) res.errors.push('Не указано юридическое лицо.');
+    if (!deptQuery) res.errors.push('Не указано структурное подразделение.');
+    if (!posQuery) res.errors.push('Не указана должность.');
+    if (!cardNumber) res.errors.push('Не указан номер карты СОУТ.');
+    if (!classRaw) {
+      res.errors.push('Не указан класс условий труда.');
+    } else if (!StorageServiceValidClasses.includes(classRaw)) {
+      res.errors.push(`Недопустимый класс условий труда «${classRaw}». Допустимы: ${StorageServiceValidClasses.join(', ')}.`);
+    }
+
+    // Факторы
+    const parsedFactors = parseSoutFactors(rec.factors_raw !== undefined ? String(rec.factors_raw) : String(rec.factors || ''));
+    if (parsedFactors.errors.length > 0) {
+      parsedFactors.errors.forEach(e => res.errors.push(e));
+    }
+    if (parsedFactors.factors.length > 0) {
+      res.data.factors = JSON.stringify(parsedFactors.factors);
+    }
+
+    // Числовые поля
+    const numFields: Array<[string, string]> = [
+      ['employees_count', 'Занятых работников'],
+      ['women_count', 'Из них женщин'],
+      ['minors_count', 'Из них несовершеннолетних'],
+      ['disabled_count', 'Из них инвалидов'],
+    ];
+    for (const [key, labelRu] of numFields) {
+      const rawVal = rec[key];
+      if (rawVal === undefined || rawVal === null || String(rawVal).trim() === '') {
+        res.data[key] = '0';
+        continue;
+      }
+      const n = Number(String(rawVal).trim());
+      if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+        res.errors.push(`Поле «${labelRu}»: ожидалось целое неотрицательное число, получено «${rawVal}».`);
+      } else {
+        res.data[key] = String(n);
+      }
+    }
+
+    // Дата утверждения отчёта
+    if (rec.report_approved_at !== undefined && String(rec.report_approved_at).trim() !== '') {
+      const parsedDate = parseExcelDate(rec.report_approved_at);
+      if (parsedDate) {
+        try {
+          validateDateNotFuture(parsedDate, 'Дата утверждения отчёта');
+          res.data.report_approved_at = parsedDate;
+        } catch (e: any) {
+          res.errors.push(e.message);
+        }
+      }
+    }
+
+    res.data.is_analogous = parseYesNo(rec.is_analogous) ? '1' : '0';
+    res.data.analogous_basis = String(rec.analogous_basis || '').trim();
+    res.data.measurement_org = String(rec.measurement_org || '').trim();
+    res.data.protocol_number = String(rec.protocol_number || '').trim();
+    res.data.declaration_active = parseYesNo(rec.declaration_active) ? '1' : '0';
+    res.data.declaration_number = String(rec.declaration_number || '').trim();
+
+    // Совпадение с базой: юрлицо по ИНН/наименованию
+    let targetLe: LegalEntity | undefined;
+    if (leQuery) {
+      targetLe = les.find(
+        l =>
+          l.status === 'active' &&
+          (l.inn === leQuery ||
+            ciCompare(l.full_name) === ciCompare(leQuery) ||
+            ciCompare(l.short_name || '') === ciCompare(leQuery))
+      );
+      if (!targetLe) {
+        res.errors.push(`Юридическое лицо «${leQuery}» не найдено в базе.`);
+      }
+    }
+
+    if (res.errors.length > 0) {
+      res.action = 'reject';
+      results.push(res);
+      return;
+    }
+
+    // Предупреждения о словаре
+    if (targetLe) {
+      const targetDept = depts.find(
+        d =>
+          d.legal_entity_id === targetLe!.id &&
+          ciCompare(d.name) === ciCompare(deptQuery) &&
+          d.status === 'active'
+      );
+      if (!targetDept) {
+        res.warnings.push(`Подразделение «${deptQuery}» отсутствует — будет создано автоматически.`);
+      }
+      const posNorm = posQuery.toLowerCase().replace(/\s+/g, ' ').trim();
+      const targetPos = positions.find(p => p.normalized_name === posNorm && p.status === 'active');
+      if (!targetPos) {
+        res.warnings.push(`Должность «${posQuery}» отсутствует в справочнике — будет создана.`);
+      }
+    }
+
+    // Ключ обновления: номер карты + юридическое лицо
+    if (targetLe && cardNumber) {
+      const existingMatch = existingCards.find(
+        c =>
+          c.status === 'active' &&
+          c.legal_entity_id === targetLe!.id &&
+          ciCompare(c.card_number) === ciCompare(cardNumber)
+      );
+      if (existingMatch) {
+        if (mode === 'update') {
+          res.action = 'update';
+          res.changes.push(
+            `Найдена карта № ${existingMatch.card_number} (${existingMatch.final_class} кл.) по ключу «номер карты + организация». Данные будут обновлены.`
+          );
+        } else {
+          res.action = 'skip';
+          res.warnings.push('Карта с таким номером уже существует в организации — строка будет пропущена.');
+        }
+      } else {
+        res.action = 'add';
+      }
+    }
+
+    results.push(res);
+  });
+
+  const summary = {
+    total: results.length,
+    add: results.filter(r => r.action === 'add').length,
+    update: results.filter(r => r.action === 'update').length,
+    skip: results.filter(r => r.action === 'skip').length,
+    reject: results.filter(r => r.action === 'reject').length,
+  };
+
+  return {
+    results,
+    structure_errors: [],
+    summary,
+  };
+}
+
+export function exportSoutToXLSX(cards: SoutCard[], filename = 'sout_cards.xlsx'): void {
+  const rows: any[][] = [SOUT_HEADERS];
+  for (const c of cards) {
+    rows.push(soutCardToRow(c));
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = SOUT_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 16) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Карты СОУТ');
+  XLSX.writeFile(wb, filename);
+}
+
+export function exportSoutToCSV(cards: SoutCard[], filename = 'sout_cards.csv'): void {
+  const lines: string[] = [];
+  lines.push(SOUT_HEADERS.map(h => `"${h.replace(/"/g, '""')}"`).join(';'));
+  for (const c of cards) {
+    const row = soutCardToRow(c);
+    lines.push(row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(';'));
+  }
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function soutCardToRow(c: SoutCard): string[] {
+  const les = storage.listLegalEntities({ pageSize: 10000 }).items;
+  const depts = storage.getDepartmentsRaw();
+  const positions = storage.getPositionsRaw();
+  const le = les.find(l => l.id === c.legal_entity_id);
+  const dept = depts.find(d => d.id === c.department_id);
+  const pos = positions.find(p => p.id === c.position_id);
+  const factorsStr = (c.factors || [])
+    .map(f => `${SOUT_FACTOR_LABELS_RU[f.type] || f.type}:${f.class}`)
+    .join('; ');
+  return [
+    sanitizeCell(le?.full_name || ''),
+    sanitizeCell(dept?.name || ''),
+    sanitizeCell(pos?.name || ''),
+    sanitizeCell(c.card_number),
+    sanitizeCell(c.workplace_label || ''),
+    sanitizeCell(c.is_analogous ? 'да' : 'нет'),
+    sanitizeCell(c.analogous_basis || ''),
+    sanitizeCell(factorsStr),
+    sanitizeCell(c.final_class),
+    sanitizeCell(c.employees_count),
+    sanitizeCell(c.women_count),
+    sanitizeCell(c.minors_count),
+    sanitizeCell(c.disabled_count),
+    sanitizeCell(c.measurement_org || ''),
+    sanitizeCell(c.protocol_number || ''),
+    sanitizeCell(formatDateForDisplay(c.report_approved_at)),
+    sanitizeCell(c.declaration_active ? 'да' : 'нет'),
+    sanitizeCell(c.declaration_number || ''),
+  ];
+}
+
 export function exportToXLSX(entities: LegalEntity[], filename = 'legal_entities.xlsx'): void {
   const rows: any[][] = [LE_HEADERS];
   for (const le of entities) {
