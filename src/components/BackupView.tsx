@@ -252,6 +252,18 @@ export const BackupView: React.FC<BackupViewProps> = ({ onRefreshCurrentLe }) =>
               <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Кадровых записей</div>
               <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{integrityReport.stats.employment_history}</div>
             </div>
+            <div style={{ background: '#fff', padding: '0.5rem 0.75rem', borderRadius: '4px', border: '1px solid #e5e7eb' }}>
+              <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Карт СОУТ</div>
+              <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{integrityReport.stats.sout_cards ?? 0}</div>
+            </div>
+            <div style={{ background: '#fff', padding: '0.5rem 0.75rem', borderRadius: '4px', border: '1px solid #e5e7eb' }}>
+              <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Карт ОПР</div>
+              <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{integrityReport.stats.opr_cards ?? 0}</div>
+            </div>
+            <div style={{ background: '#fff', padding: '0.5rem 0.75rem', borderRadius: '4px', border: '1px solid #e5e7eb' }}>
+              <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>Мероприятий ОПР</div>
+              <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{integrityReport.stats.opr_measures ?? 0}</div>
+            </div>
           </div>
 
           {integrityReport.errors.length > 0 && (
@@ -305,8 +317,8 @@ export const BackupView: React.FC<BackupViewProps> = ({ onRefreshCurrentLe }) =>
                   {b.counts ? (
                     <span style={{ fontSize: '0.88rem' }}>
                       Юрлиц: {b.counts.legal_entities}; Подразделений: {b.counts.departments}; Контингент:{' '}
-                      {b.counts.contingent}; Работников: {b.counts.employees}; История:{' '}
-                      {b.counts.employment_history ?? 0}; Аудит: {b.counts.audit_logs}
+                      {b.counts.contingent}; Работников: {b.counts.employees}; СОУТ: {b.counts.sout_cards ?? 0}; ОПР:{' '}
+                      {b.counts.opr_cards ?? 0}; Аудит: {b.counts.audit_logs}
                     </span>
                   ) : (
                     <span className="muted">Снимок базы</span>

@@ -17,6 +17,11 @@ import {
   SoutFamiliarization,
   SoutGuarantees,
   SoutHarmfulFactor,
+  OprCard,
+  OprHazard,
+  OprMeasureItem,
+  RiskLevel,
+  RISK_LEVEL_LABELS_RU,
 } from '../types';
 import {
   normalizeText,
@@ -46,7 +51,10 @@ const STORAGE_KEYS = {
   ELECTRICAL_SAFETY_GROUPS: 'saot_electrical_safety_groups',
   SOUT_CARDS: 'saot_sout_cards',
   SOUT_FAMILIARIZATIONS: 'saot_sout_familiarizations',
+  OPR_CARDS: 'saot_opr_cards',
+  OPR_MEASURES: 'saot_opr_measures',
 };
+
 
 function generateUUID(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -151,6 +159,124 @@ const DEFAULT_MODULES: ModuleItem[] = [
     version: '1.0.0',
     enabled: false,
     requires_core: ['db', 'legal_entities', 'contingent', 'employees'],
+  },
+  {
+    module_id: 'opr',
+    title: 'Оценка профессиональных рисков (ОПР)',
+    description:
+      'Идентификация опасностей (Приказ Минтруда 776н), матрица оценки рисков (тяжесть x вероятность), карты рисков рабочего места, план мероприятий по снижению рисков, импорт/экспорт.',
+    version: '1.0.0',
+    enabled: false,
+    requires_core: ['db', 'legal_entities', 'contingent'],
+  },
+];
+
+export interface StandardHazardTemplate {
+  code: string;
+  category: string;
+  name: string;
+  danger_source?: string;
+  default_severity: number;
+  default_probability: number;
+  recommended_measures: string;
+}
+
+export const DEFAULT_OPR_HAZARDS: StandardHazardTemplate[] = [
+  {
+    code: '01.01',
+    category: 'Механические опасности',
+    name: 'Опасность падения из-за потери равновесия / скользкий пол',
+    default_severity: 2,
+    default_probability: 3,
+    recommended_measures: 'Уборка загрязнений, противоскользящие покрытия, нескользкая спецобувь',
+  },
+  {
+    code: '01.02',
+    category: 'Механические опасности',
+    name: 'Опасность падения предметов и грузов с высоты',
+    default_severity: 4,
+    default_probability: 2,
+    recommended_measures: 'Защитные каски, ограждение зоны перемещения грузов, защитные сетки',
+  },
+  {
+    code: '01.03',
+    category: 'Механические опасности',
+    name: 'Опасность затягивания в подвижные детали оборудования и механизмов',
+    default_severity: 4,
+    default_probability: 2,
+    recommended_measures: 'Защитные кожухи, блокировки пуска, концевые выключатели',
+  },
+  {
+    code: '01.04',
+    category: 'Механические опасности',
+    name: 'Опасность пореза острыми кромками, заусенцами, режущим инструментом',
+    default_severity: 2,
+    default_probability: 3,
+    recommended_measures: 'Защитные перчатки от порезов, регулярная отбраковка инструмента',
+  },
+  {
+    code: '02.01',
+    category: 'Электрические опасности',
+    name: 'Опасность прямого прикосновения к токоведущим частям под напряжением',
+    default_severity: 5,
+    default_probability: 1,
+    recommended_measures: 'Изоляция, защитные оболочки, предупреждающие знаки, УЗО',
+  },
+  {
+    code: '02.02',
+    category: 'Электрические опасности',
+    name: 'Опасность косвенного прикосновения при повреждении изоляции (пробой на корпус)',
+    default_severity: 4,
+    default_probability: 2,
+    recommended_measures: 'Защитное заземление и зануление, периодические замеры сопротивления изоляции',
+  },
+  {
+    code: '03.01',
+    category: 'Термические опасности',
+    name: 'Опасность термического ожога от контакта с нагретыми поверхностями или жидкостями',
+    default_severity: 3,
+    default_probability: 2,
+    recommended_measures: 'Теплоизоляция горячих трубопроводов, термостойкие перчатки',
+  },
+  {
+    code: '04.01',
+    category: 'Физические факторы',
+    name: 'Воздействие повышенного уровня производственного шума',
+    default_severity: 3,
+    default_probability: 3,
+    recommended_measures: 'Звукоизоляция оборудования, наушники/вкладыши противошумные',
+  },
+  {
+    code: '04.02',
+    category: 'Физические факторы',
+    name: 'Воздействие недостаточной освещенности рабочей зоны',
+    default_severity: 2,
+    default_probability: 3,
+    recommended_measures: 'Своевременная замена ламп, установка местного освещения',
+  },
+  {
+    code: '05.01',
+    category: 'Химические опасности',
+    name: 'Вдыхание вредных паров, газов, аэрозолей или пыли',
+    default_severity: 3,
+    default_probability: 2,
+    recommended_measures: 'Приточно-вытяжная вентиляция, фильтрующие респираторы',
+  },
+  {
+    code: '06.01',
+    category: 'Психофизиологические опасности',
+    name: 'Физические перегрузки при подъеме и перемещении тяжестей вручную',
+    default_severity: 3,
+    default_probability: 3,
+    recommended_measures: 'Механизация подъема (тележки, тали), соблюдение предельных норм подъема тяжестей',
+  },
+  {
+    code: '06.02',
+    category: 'Психофизиологические опасности',
+    name: 'Длительное статическое напряжение и неудобная рабочая поза',
+    default_severity: 2,
+    default_probability: 4,
+    recommended_measures: 'Эргономичные рабочие кресла, чередование поз, регламентированные перерывы',
   },
 ];
 
@@ -1947,6 +2073,425 @@ class StorageService {
     return { added, updated, skipped, rejected };
   }
 
+  // ===============================================
+  // Модуль «Оценка профессиональных рисков (ОПР)» (Этап 7, Приказ 776н)
+  // ===============================================
+
+  public getOprCardsRaw(): OprCard[] {
+    return loadFromStorage<OprCard[]>(STORAGE_KEYS.OPR_CARDS, []);
+  }
+
+  public saveOprCardsRaw(items: OprCard[]): void {
+    saveToStorage(STORAGE_KEYS.OPR_CARDS, items);
+  }
+
+  public getOprMeasuresRaw(): OprMeasureItem[] {
+    return loadFromStorage<OprMeasureItem[]>(STORAGE_KEYS.OPR_MEASURES, []);
+  }
+
+  public saveOprMeasuresRaw(items: OprMeasureItem[]): void {
+    saveToStorage(STORAGE_KEYS.OPR_MEASURES, items);
+  }
+
+  public static computeRiskScore(severity: number, probability: number): number {
+    const s = Number(severity);
+    const p = Number(probability);
+    if (isNaN(s) || s < 1 || s > 5) {
+      throw new Error('Тяжесть должна быть в диапазоне от 1 до 5.');
+    }
+    if (isNaN(p) || p < 1 || p > 5) {
+      throw new Error('Вероятность должна быть в диапазоне от 1 до 5.');
+    }
+    return Math.round(s) * Math.round(p);
+  }
+
+  public computeRiskScore(severity: number, probability: number): number {
+    return StorageService.computeRiskScore(severity, probability);
+  }
+
+  public static computeRiskLevel(score: number): RiskLevel {
+    if (score >= 16) return 'unacceptable';
+    if (score >= 10) return 'high';
+    if (score >= 5) return 'moderate';
+    return 'low';
+  }
+
+  public computeRiskLevel(score: number): RiskLevel {
+    return StorageService.computeRiskLevel(score);
+  }
+
+  public static computeOverallRisk(hazards: OprHazard[]): { score: number; level: RiskLevel } {
+    if (!hazards || hazards.length === 0) {
+      return { score: 1, level: 'low' };
+    }
+    let maxScore = 1;
+    for (const h of hazards) {
+      const s = Math.max(1, Math.min(5, Math.round(Number(h.severity) || 1)));
+      const p = Math.max(1, Math.min(5, Math.round(Number(h.probability) || 1)));
+      const sc = s * p;
+      if (sc > maxScore) maxScore = sc;
+    }
+    return { score: maxScore, level: StorageService.computeRiskLevel(maxScore) };
+  }
+
+  public computeOverallRisk(hazards: OprHazard[]): { score: number; level: RiskLevel } {
+    return StorageService.computeOverallRisk(hazards);
+  }
+
+  private validateOprRefs(data: { legal_entity_id: string; department_id: string; position_id: string }): void {
+    if (!data.legal_entity_id) throw new Error('Юридическое лицо обязательно для заполнения.');
+    if (!data.department_id) throw new Error('Подразделение обязательно для заполнения.');
+    if (!data.position_id) throw new Error('Должность обязательна для заполнения.');
+    const le = this.getLegalEntityById(data.legal_entity_id);
+    if (!le) throw new Error('Юридическое лицо не найдено.');
+    const dept = this.getDepartmentById(data.department_id);
+    if (!dept || dept.legal_entity_id !== data.legal_entity_id) {
+      throw new Error('Подразделение не принадлежит выбранному юридическому лицу.');
+    }
+    if (!this.getPositionById(data.position_id)) {
+      throw new Error('Должность не найдена в справочнике.');
+    }
+  }
+
+  public listOprCards(params?: {
+    search?: string;
+    legal_entity_id?: string;
+    department_id?: string;
+    risk_level?: RiskLevel;
+    status?: EntityStatus;
+    page?: number;
+    pageSize?: number;
+  }): { items: OprCard[]; total: number } {
+    const all = this.getOprCardsRaw();
+    const status = params?.status || 'active';
+    let filtered = all.filter(c => c.status === status);
+
+    if (params?.legal_entity_id) {
+      filtered = filtered.filter(c => c.legal_entity_id === params.legal_entity_id);
+    }
+    if (params?.department_id) {
+      filtered = filtered.filter(c => c.department_id === params.department_id);
+    }
+    if (params?.risk_level) {
+      filtered = filtered.filter(c => c.overall_risk_level === params.risk_level);
+    }
+
+    const term = (params?.search || '').trim().toLowerCase();
+    if (term) {
+      const positions = this.getPositionsRaw();
+      const departments = this.getDepartmentsRaw();
+      filtered = filtered.filter(c => {
+        const pos = positions.find(p => p.id === c.position_id);
+        const dept = departments.find(d => d.id === c.department_id);
+        return (
+          c.card_number.toLowerCase().includes(term) ||
+          (pos && pos.name.toLowerCase().includes(term)) ||
+          (dept && dept.name.toLowerCase().includes(term)) ||
+          (c.workplace_label || '').toLowerCase().includes(term) ||
+          c.hazards.some(h => h.name.toLowerCase().includes(term) || h.category.toLowerCase().includes(term))
+        );
+      });
+    }
+
+    filtered.sort((a, b) => ciCompare(a.card_number).localeCompare(ciCompare(b.card_number)));
+    const total = filtered.length;
+    const page = Math.max(1, params?.page || 1);
+    const pageSize = params?.pageSize || 30;
+    const start = (page - 1) * pageSize;
+    return { items: filtered.slice(start, start + pageSize), total };
+  }
+
+  public getOprCardById(id: string): OprCard | null {
+    return this.getOprCardsRaw().find(c => c.id === id) || null;
+  }
+
+  public createOprCard(data: {
+    card_number: string;
+    legal_entity_id: string;
+    department_id: string;
+    position_id: string;
+    contingent_record_id?: string | null;
+    workplace_label?: string | null;
+    assessment_date?: string | null;
+    assessment_method?: string;
+    commission_members?: string | null;
+    hazards?: OprHazard[];
+  }): OprCard {
+    if (!this.isModuleEnabled('opr')) {
+      throw new Error('Модуль ОПР отключён. Включите модуль в реестре модулей.');
+    }
+    const card_number = normalizeText(data.card_number);
+    if (!card_number) throw new Error('Номер карты ОПР обязателен для заполнения.');
+
+    this.validateOprRefs(data);
+
+    const all = this.getOprCardsRaw();
+    const dup = all.find(
+      c => c.status === 'active' && c.legal_entity_id === data.legal_entity_id && ciCompare(c.card_number) === ciCompare(card_number)
+    );
+    if (dup) {
+      throw new Error(`Карта ОПР № «${card_number}» уже зарегистрирована в данном юридическом лице.`);
+    }
+
+    const now = nowISO();
+    const rawHazards = Array.isArray(data.hazards) ? data.hazards : [];
+    const normalizedHazards: OprHazard[] = rawHazards.map(h => {
+      const score = StorageService.computeRiskScore(h.severity, h.probability);
+      return {
+        id: h.id || generateUUID(),
+        code: normalizeText(h.code),
+        category: normalizeText(h.category) || 'Прочая',
+        name: normalizeText(h.name) || 'Не указана',
+        danger_source: normalizeText(h.danger_source),
+        severity: Math.max(1, Math.min(5, Math.round(Number(h.severity) || 1))),
+        probability: Math.max(1, Math.min(5, Math.round(Number(h.probability) || 1))),
+        risk_score: score,
+        risk_level: StorageService.computeRiskLevel(score),
+        existing_measures: normalizeText(h.existing_measures),
+        recommended_measures: normalizeText(h.recommended_measures),
+      };
+    });
+
+    const overall = StorageService.computeOverallRisk(normalizedHazards);
+
+    const card: OprCard = {
+      id: generateUUID(),
+      card_number,
+      legal_entity_id: data.legal_entity_id,
+      department_id: data.department_id,
+      position_id: data.position_id,
+      contingent_record_id: data.contingent_record_id || null,
+      workplace_label: normalizeText(data.workplace_label),
+      assessment_date: data.assessment_date || now.split('T')[0],
+      assessment_method: normalizeText(data.assessment_method) || 'Матричный метод 5х5 (Приказ Минтруда 776н)',
+      commission_members: normalizeText(data.commission_members),
+      hazards: normalizedHazards,
+      overall_risk_score: overall.score,
+      overall_risk_level: overall.level,
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    };
+
+    all.push(card);
+    this.saveOprCardsRaw(all);
+    this.addAudit('opr_card', card.id, 'opr_create' as any, null, { ...card }, `Создание карты ОПР № ${card.card_number}`);
+    return card;
+  }
+
+  public updateOprCard(
+    id: string,
+    data: Partial<OprCard>
+  ): OprCard {
+    if (!this.isModuleEnabled('opr')) {
+      throw new Error('Модуль ОПР отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getOprCardsRaw();
+    const index = all.findIndex(c => c.id === id);
+    if (index === -1) throw new Error('Карта ОПР не найдена.');
+
+    const existing = all[index];
+    const before = { ...existing };
+
+    const mergedRefs = {
+      legal_entity_id: data.legal_entity_id || existing.legal_entity_id,
+      department_id: data.department_id || existing.department_id,
+      position_id: data.position_id || existing.position_id,
+    };
+    this.validateOprRefs(mergedRefs);
+
+    const card_number = data.card_number !== undefined ? normalizeText(data.card_number) : existing.card_number;
+    if (!card_number) throw new Error('Номер карты ОПР обязателен для заполнения.');
+
+    const dup = all.find(
+      c => c.id !== id && c.status === 'active' && c.legal_entity_id === mergedRefs.legal_entity_id && ciCompare(c.card_number) === ciCompare(card_number)
+    );
+    if (dup) {
+      throw new Error(`Карта ОПР № «${card_number}» уже зарегистрирована в данном юридическом лице.`);
+    }
+
+    let normalizedHazards = existing.hazards;
+    if (Array.isArray(data.hazards)) {
+      normalizedHazards = data.hazards.map(h => {
+        const score = StorageService.computeRiskScore(h.severity, h.probability);
+        return {
+          id: h.id || generateUUID(),
+          code: normalizeText(h.code),
+          category: normalizeText(h.category) || 'Прочая',
+          name: normalizeText(h.name) || 'Не указана',
+          danger_source: normalizeText(h.danger_source),
+          severity: Math.max(1, Math.min(5, Math.round(Number(h.severity) || 1))),
+          probability: Math.max(1, Math.min(5, Math.round(Number(h.probability) || 1))),
+          risk_score: score,
+          risk_level: StorageService.computeRiskLevel(score),
+          existing_measures: normalizeText(h.existing_measures),
+          recommended_measures: normalizeText(h.recommended_measures),
+        };
+      });
+    }
+
+    const overall = StorageService.computeOverallRisk(normalizedHazards);
+
+    const updated: OprCard = {
+      ...existing,
+      ...mergedRefs,
+      card_number,
+      contingent_record_id: data.contingent_record_id !== undefined ? data.contingent_record_id : existing.contingent_record_id,
+      workplace_label: data.workplace_label !== undefined ? normalizeText(data.workplace_label) : existing.workplace_label,
+      assessment_date: data.assessment_date !== undefined ? data.assessment_date : existing.assessment_date,
+      assessment_method: data.assessment_method !== undefined ? (normalizeText(data.assessment_method) || existing.assessment_method) : existing.assessment_method,
+      commission_members: data.commission_members !== undefined ? normalizeText(data.commission_members) : existing.commission_members,
+      hazards: normalizedHazards,
+      overall_risk_score: overall.score,
+      overall_risk_level: overall.level,
+      updated_at: nowISO(),
+    };
+
+    all[index] = updated;
+    this.saveOprCardsRaw(all);
+    this.addAudit('opr_card', updated.id, 'opr_update' as any, before, { ...updated }, `Обновление карты ОПР № ${updated.card_number}`);
+    return updated;
+  }
+
+  public archiveOprCard(id: string): OprCard {
+    if (!this.isModuleEnabled('opr')) {
+      throw new Error('Модуль ОПР отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getOprCardsRaw();
+    const index = all.findIndex(c => c.id === id);
+    if (index === -1) throw new Error('Карта ОПР не найдена.');
+    const existing = all[index];
+    if (existing.status === 'archived') throw new Error('Карта ОПР уже в архиве.');
+    const before = { ...existing };
+    existing.status = 'archived';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveOprCardsRaw(all);
+    this.addAudit('opr_card', existing.id, 'opr_archive' as any, before, { ...existing }, `Архивирование карты ОПР № ${existing.card_number}`);
+    return existing;
+  }
+
+  public restoreOprCard(id: string): OprCard {
+    if (!this.isModuleEnabled('opr')) {
+      throw new Error('Модуль ОПР отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getOprCardsRaw();
+    const index = all.findIndex(c => c.id === id);
+    if (index === -1) throw new Error('Карта ОПР не найдена.');
+    const existing = all[index];
+    if (existing.status === 'active') throw new Error('Карта ОПР уже активна.');
+    const before = { ...existing };
+    existing.status = 'active';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveOprCardsRaw(all);
+    this.addAudit('opr_card', existing.id, 'opr_restore' as any, before, { ...existing }, `Восстановление карты ОПР № ${existing.card_number}`);
+    return existing;
+  }
+
+  // --- План мероприятий по снижению рисков (Приказ 776н) ---
+  public listOprMeasures(cardId?: string): OprMeasureItem[] {
+    const all = this.getOprMeasuresRaw();
+    if (!cardId) return all;
+    return all.filter(m => m.opr_card_id === cardId);
+  }
+
+  public createOprMeasure(
+    cardIdOrData:
+      | string
+      | {
+          opr_card_id: string;
+          hazard_id?: string | null;
+          measure_title: string;
+          deadline?: string | null;
+          responsible_person?: string | null;
+          cost_estimate?: string | null;
+          comment?: string | null;
+          status?: 'planned' | 'in_progress' | 'completed';
+        },
+    maybeData?: {
+      hazard_id?: string | null;
+      measure_title: string;
+      deadline?: string | null;
+      responsible_person?: string | null;
+      cost_estimate?: string | null;
+      comment?: string | null;
+      status?: 'planned' | 'in_progress' | 'completed';
+    }
+  ): OprMeasureItem {
+    if (!this.isModuleEnabled('opr')) {
+      throw new Error('Модуль ОПР отключён. Включите модуль в реестре модулей.');
+    }
+    const cardId = typeof cardIdOrData === 'string' ? cardIdOrData : cardIdOrData.opr_card_id;
+    const data = typeof cardIdOrData === 'string' ? maybeData! : cardIdOrData;
+
+    const card = this.getOprCardById(cardId);
+    if (!card) throw new Error('Карта ОПР не найдена.');
+    const title = normalizeText(data?.measure_title);
+    if (!title) throw new Error('Укажите наименование мероприятия по снижению риска.');
+
+    const now = nowISO();
+    const item: OprMeasureItem = {
+      id: generateUUID(),
+      opr_card_id: cardId,
+      hazard_id: data.hazard_id || null,
+      measure_title: title,
+      deadline: data.deadline || null,
+      responsible_person: normalizeText(data.responsible_person),
+      status: data.status || 'planned',
+      cost_estimate: normalizeText(data.cost_estimate),
+      comment: normalizeText(data.comment),
+      created_at: now,
+      updated_at: now,
+    };
+
+    const all = this.getOprMeasuresRaw();
+    all.push(item);
+    this.saveOprMeasuresRaw(all);
+    this.addAudit('opr_measure', item.id, 'opr_measure_create' as any, null, { ...item }, `Добавление мероприятия по снижению рисков к карте № ${card.card_number}`);
+    return item;
+  }
+
+  public updateOprMeasure(id: string, data: Partial<OprMeasureItem>): OprMeasureItem {
+    if (!this.isModuleEnabled('opr')) {
+      throw new Error('Модуль ОПР отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getOprMeasuresRaw();
+    const index = all.findIndex(m => m.id === id);
+    if (index === -1) throw new Error('Мероприятие не найдено.');
+    const existing = all[index];
+    const before = { ...existing };
+
+    const updated: OprMeasureItem = {
+      ...existing,
+      measure_title: data.measure_title !== undefined ? (normalizeText(data.measure_title) || existing.measure_title) : existing.measure_title,
+      deadline: data.deadline !== undefined ? data.deadline : existing.deadline,
+      responsible_person: data.responsible_person !== undefined ? normalizeText(data.responsible_person) : existing.responsible_person,
+      status: data.status || existing.status,
+      cost_estimate: data.cost_estimate !== undefined ? normalizeText(data.cost_estimate) : existing.cost_estimate,
+      comment: data.comment !== undefined ? normalizeText(data.comment) : existing.comment,
+      updated_at: nowISO(),
+    };
+
+    all[index] = updated;
+    this.saveOprMeasuresRaw(all);
+    this.addAudit('opr_measure', updated.id, 'opr_measure_update' as any, before, { ...updated }, `Обновление мероприятия «${updated.measure_title}»`);
+    return updated;
+  }
+
+  public deleteOprMeasure(id: string): void {
+    if (!this.isModuleEnabled('opr')) {
+      throw new Error('Модуль ОПР отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getOprMeasuresRaw();
+    const index = all.findIndex(m => m.id === id);
+    if (index === -1) throw new Error('Мероприятие не найдено.');
+    const before = { ...all[index] };
+    all.splice(index, 1);
+    this.saveOprMeasuresRaw(all);
+    this.addAudit('opr_measure', before.id, 'delete' as any, before, null, `Удаление мероприятия «${before.measure_title}»`);
+  }
+
   // --- Backup & Restore ---
   public createBackup(label?: string): string {
     const manifest = {
@@ -1962,6 +2507,8 @@ class StorageService {
         employment_history: this.getEmploymentHistoryRaw().length,
         sout_cards: this.getSoutCardsRaw().length,
         sout_familiarizations: this.getSoutFamiliarizationsRaw().length,
+        opr_cards: this.getOprCardsRaw().length,
+        opr_measures: this.getOprMeasuresRaw().length,
         audit_logs: this.getAuditLogs().length,
       },
       data: {
@@ -1973,6 +2520,8 @@ class StorageService {
         employment_history: this.getEmploymentHistoryRaw(),
         sout_cards: this.getSoutCardsRaw(),
         sout_familiarizations: this.getSoutFamiliarizationsRaw(),
+        opr_cards: this.getOprCardsRaw(),
+        opr_measures: this.getOprMeasuresRaw(),
         audit_logs: this.getAuditLogs(),
       },
     };
@@ -2039,9 +2588,16 @@ class StorageService {
     if (Array.isArray(parsed.data.sout_familiarizations)) {
       saveToStorage(STORAGE_KEYS.SOUT_FAMILIARIZATIONS, parsed.data.sout_familiarizations);
     }
+    if (Array.isArray(parsed.data.opr_cards)) {
+      saveToStorage(STORAGE_KEYS.OPR_CARDS, parsed.data.opr_cards);
+    }
+    if (Array.isArray(parsed.data.opr_measures)) {
+      saveToStorage(STORAGE_KEYS.OPR_MEASURES, parsed.data.opr_measures);
+    }
     if (Array.isArray(parsed.data.audit_logs)) {
       saveToStorage(STORAGE_KEYS.AUDIT_LOG, parsed.data.audit_logs);
     }
+
 
     const integrityReport = this.verifyDataIntegrity();
 
@@ -2072,6 +2628,8 @@ class StorageService {
     const history = this.getEmploymentHistoryRaw();
     const soutCards = this.getSoutCardsRaw();
     const soutFam = this.getSoutFamiliarizationsRaw();
+    const oprCards = this.getOprCardsRaw();
+    const oprMeasures = this.getOprMeasuresRaw();
     const logs = this.getAuditLogs();
 
     const errors: string[] = [];
@@ -2254,6 +2812,33 @@ class StorageService {
       }
     }
 
+    // 9. ОПР cards verification (Stage 7, module 'opr')
+    const oprCardMap = new Map(oprCards.map(c => [c.id, c]));
+    for (const c of oprCards) {
+      if (!c.card_number) {
+        errors.push(`Карта ОПР (ID: ${c.id}) имеет пустой номер карты.`);
+      }
+      if (!c.legal_entity_id || !leMap.has(c.legal_entity_id)) {
+        errors.push(`Карта ОПР № «${c.card_number}» (ID: ${c.id}) ссылается на несуществующее юридическое лицо (ID: ${c.legal_entity_id}).`);
+      }
+      const dept = deptMap.get(c.department_id);
+      if (!dept) {
+        errors.push(`Карта ОПР № «${c.card_number}» (ID: ${c.id}) ссылается на несуществующее подразделение (ID: ${c.department_id}).`);
+      } else if (c.legal_entity_id && dept.legal_entity_id !== c.legal_entity_id) {
+        errors.push(`Карта ОПР № «${c.card_number}» (ID: ${c.id}) ссылается на подразделение другого юридического лица.`);
+      }
+      if (!c.position_id || !posMap.has(c.position_id)) {
+        errors.push(`Карта ОПР № «${c.card_number}» (ID: ${c.id}) ссылается на несуществующую должность (ID: ${c.position_id}).`);
+      }
+    }
+
+    // 10. ОПР measures verification
+    for (const m of oprMeasures) {
+      if (!m.opr_card_id || !oprCardMap.has(m.opr_card_id)) {
+        errors.push(`Мероприятие ОПР по снижению рисков (ID: ${m.id}) ссылается на несуществующую карту ОПР (ID: ${m.opr_card_id}).`);
+      }
+    }
+
     return {
       valid: errors.length === 0,
       timestamp: nowISO(),
@@ -2268,10 +2853,14 @@ class StorageService {
         employment_history: history.length,
         sout_cards: soutCards.length,
         sout_familiarizations: soutFam.length,
+        opr_cards: oprCards.length,
+        opr_measures: oprMeasures.length,
         audit_logs: logs.length,
       },
     };
   }
 }
 
+export { StorageService };
 export const storage = new StorageService();
+

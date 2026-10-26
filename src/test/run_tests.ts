@@ -583,6 +583,18 @@ assert.throws(
   /другому юридическому лицу/
 );
 
+// In another LE -> allowed (isolation)
+const cardIso = storage.createSoutCard({
+  card_number: 'СОУТ-001',
+  legal_entity_id: otherLe.id,
+  department_id: otherDept.id,
+  position_id: testPos.id,
+  final_class: '2',
+});
+assert.equal(cardIso.card_number, 'СОУТ-001');
+assert.equal(cardIso.legal_entity_id, otherLe.id);
+
+
 // Familiarization list and audit log registration (sout_familiarize)
 const famList = storage.listSoutFamiliarizations(card33.id);
 assert.equal(famList.length, 1);
@@ -622,13 +634,19 @@ storage.saveSoutFamiliarizationsRaw(famAgain);
 assert.equal(storage.verifyDataIntegrity().valid, true);
 
 // Module toggle: disable hides menu/routes and blocks CRUD, data preserved
-storage.toggleModule('sout');
+const setModuleState = (moduleId: string, enabled: boolean) => {
+  if (storage.isModuleEnabled(moduleId) !== enabled) {
+    storage.toggleModule(moduleId);
+  }
+};
+setModuleState('sout', false);
 assert.equal(storage.isModuleEnabled('sout'), false);
 assert.throws(() => storage.createSoutCard({ card_number: 'OFF-1', legal_entity_id: testLe.id, department_id: testDept.id, position_id: testPos.id, final_class: '2' }), /Модуль СОУТ отключён/);
 assert.throws(() => storage.familiarizeSoutCard(card33.id, testEmp.employee.id), /Модуль СОУТ отключён/);
 assert.equal(storage.getSoutCardsRaw().length >= 4, true); // данные сохранены при отключении
-storage.toggleModule('sout');
+setModuleState('sout', true);
 assert.equal(storage.isModuleEnabled('sout'), true);
+
 
 // Backup manifest includes sout counts and body; restore round-trip preserves SOUT
 const backup2 = JSON.parse(storage.createBackup('test-stage6'));
@@ -648,6 +666,252 @@ assert.equal(storage.verifyDataIntegrity().valid, true);
 // Module remains enabled after restore (module registry is not part of backup payload)
 assert.equal(storage.isModuleEnabled('sout'), true);
 
-console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–6 УСПЕШНО ПРОЙДЕНЫ (19/19)!');
+console.log('✅ ТЕСТЫ ЭТАПОВ 2–6 ПРОЙДЕНЫ (19/19)');
+
+// 20. OPR (Stage 7): 5x5 Matrix calculations, bounds, hazards catalog, card CRUD, measures plan, and legal entity isolation
+console.log('[20/21] Тестирование модуля ОПР: матрица 5х5, уровни риска, каталог опасностей 776н и план мероприятий...');
+
+import { DEFAULT_OPR_HAZARDS } from '../services/storage';
+import { mapOprHeaders, parseOprHazards, OPR_HEADERS } from '../services/excel';
+
+// 5x5 Matrix calculations (severity 1..5, probability 1..5, score 1..25)
+assert.equal(storage.computeRiskScore(1, 1), 1);
+assert.equal(storage.computeRiskScore(3, 3), 9);
+assert.equal(storage.computeRiskScore(4, 3), 12);
+assert.equal(storage.computeRiskScore(5, 5), 25);
+
+// Bounds validation
+assert.throws(() => storage.computeRiskScore(0, 3), /Тяжесть должна быть в диапазоне от 1 до 5/);
+assert.throws(() => storage.computeRiskScore(6, 3), /Тяжесть должна быть в диапазоне от 1 до 5/);
+assert.throws(() => storage.computeRiskScore(3, 0), /Вероятность должна быть в диапазоне от 1 до 5/);
+assert.throws(() => storage.computeRiskScore(3, 6), /Вероятность должна быть в диапазоне от 1 до 5/);
+
+// Risk levels
+assert.equal(storage.computeRiskLevel(1), 'low');
+assert.equal(storage.computeRiskLevel(4), 'low');
+assert.equal(storage.computeRiskLevel(5), 'moderate');
+assert.equal(storage.computeRiskLevel(9), 'moderate');
+assert.equal(storage.computeRiskLevel(10), 'high');
+assert.equal(storage.computeRiskLevel(15), 'high');
+assert.equal(storage.computeRiskLevel(16), 'unacceptable');
+assert.equal(storage.computeRiskLevel(25), 'unacceptable');
+
+// Catalog of standard hazards (Приказ 776н)
+assert.ok(DEFAULT_OPR_HAZARDS.length >= 12);
+assert.ok(DEFAULT_OPR_HAZARDS.some(h => h.category.includes('Механическ')));
+assert.ok(DEFAULT_OPR_HAZARDS.some(h => h.category.includes('Электрическ')));
+assert.ok(DEFAULT_OPR_HAZARDS.some(h => h.name.includes('падения') || h.category.includes('Механическ')));
+
+// Disabled module blocks creation before validation
+assert.equal(storage.isModuleEnabled('opr'), false);
+assert.throws(
+  () =>
+    storage.createOprCard({
+      card_number: 'OFF-0',
+      legal_entity_id: testLe.id,
+      department_id: testDept.id,
+      position_id: testPos.id,
+      hazards: [],
+    }),
+  /Модуль ОПР отключён/
+);
+// Enable the module for further tests
+storage.toggleModule('opr');
+assert.equal(storage.isModuleEnabled('opr'), true);
+
+// Create OPR Card with multiple hazards
+const testHazards = [
+  {
+    id: 'hz-1',
+    category: 'Механическая',
+    name: 'Движущиеся детали оборудования',
+    severity: 3,
+    probability: 3,
+    risk_score: 9,
+    risk_level: storage.computeRiskLevel(9),
+  },
+  {
+    id: 'hz-2',
+    category: 'Падение',
+    name: 'Падение на скользкой поверхности',
+    severity: 4,
+    probability: 3,
+    risk_score: 12,
+    risk_level: storage.computeRiskLevel(12),
+  },
+];
+
+const oprCard1 = storage.createOprCard({
+  card_number: 'ОПР-001',
+  legal_entity_id: testLe.id,
+  department_id: testDept.id,
+  position_id: testPos.id,
+  workplace_label: 'Участок механической обработки',
+  assessment_date: '2024-05-15',
+  assessment_method: 'Матричный метод (5x5, Приказ 776н)',
+  commission_members: 'Петров А.А., Сидоров В.В.',
+  hazards: testHazards,
+});
+
+assert.equal(oprCard1.card_number, 'ОПР-001');
+assert.equal(oprCard1.overall_risk_score, 12); // максимальный из 9 и 12
+assert.equal(oprCard1.overall_risk_level, 'high');
+assert.equal(oprCard1.hazards.length, 2);
+
+// Card number uniqueness per legal entity
+assert.throws(
+  () =>
+    storage.createOprCard({
+      card_number: 'ОПР-001',
+      legal_entity_id: testLe.id,
+      department_id: testDept.id,
+      position_id: testPos.id,
+      hazards: [],
+    }),
+  /уже зарегистрирована/
+);
+
+// Card number in another legal entity is permitted (multi-tenant isolation)
+const oprCardOther = storage.createOprCard({
+  card_number: 'ОПР-001',
+  legal_entity_id: otherLe.id,
+  department_id: otherDept.id,
+  position_id: testPos.id,
+  hazards: [],
+});
+assert.equal(oprCardOther.card_number, 'ОПР-001');
+assert.equal(oprCardOther.legal_entity_id, otherLe.id);
+
+// Risk reduction action plan (OprMeasureItem)
+const measure1 = storage.createOprMeasure({
+  opr_card_id: oprCard1.id,
+  measure_title: 'Установка защитного кожуха на станок',
+  deadline: '2024-08-01',
+  responsible_person: 'Главный механик',
+  cost_estimate: '25 000 руб.',
+  status: 'planned',
+});
+assert.equal(measure1.measure_title, 'Установка защитного кожуха на станок');
+assert.equal(measure1.status, 'planned');
+
+const measuresList = storage.listOprMeasures(oprCard1.id);
+assert.equal(measuresList.length, 1);
+
+// Update measure status
+const updatedMeasure = storage.updateOprMeasure(measure1.id, { status: 'completed' });
+assert.equal(updatedMeasure.status, 'completed');
+
+// Validation: measure title required
+assert.throws(
+  () =>
+    storage.createOprMeasure({
+      opr_card_id: oprCard1.id,
+      measure_title: '',
+    }),
+  /Укажите наименование мероприятия/
+);
+
+// 21. OPR mapping, referential integrity, module toggle, and backup round-trip
+console.log('[21/21] Тестирование маппинга ОПР, ссылочной целостности, переключения модуля и бэкапа...');
+
+// Header mapping & aliases
+const oprHeadersMap = mapOprHeaders([
+  'Юридическое лицо',
+  'Структурное подразделение',
+  'Должность',
+  'Номер карты ОПР',
+  'Рабочее место',
+  'Дата оценки',
+  'Идентифицированные опасности',
+]);
+assert.equal(oprHeadersMap.problems.length, 0);
+assert.ok(Object.values(oprHeadersMap.mapping).includes('legal_entity'));
+assert.ok(Object.values(oprHeadersMap.mapping).includes('card_number'));
+
+// Hazard text parsing
+const parsedHz = parseOprHazards('Механическая - Движущиеся детали [Т:3, В:3]; Термическая - Горячие поверхности [Т:2, В:2]');
+assert.equal(parsedHz.length, 2);
+assert.equal(parsedHz[0].category, 'Механическая');
+assert.equal(parsedHz[0].risk_score, 9);
+assert.equal(parsedHz[0].risk_level, 'moderate');
+assert.equal(parsedHz[1].category, 'Термическая');
+assert.equal(parsedHz[1].risk_score, 4);
+assert.equal(parsedHz[1].risk_level, 'low');
+
+// Referential integrity: corrupt card department link
+const rawOprCards = storage.getOprCardsRaw();
+const savedOprDept = rawOprCards[0].department_id;
+rawOprCards[0].department_id = 'missing-dept-uuid';
+storage.saveOprCardsRaw(rawOprCards);
+const brokenOpr = storage.verifyDataIntegrity();
+assert.equal(brokenOpr.valid, false);
+assert.ok(brokenOpr.errors.some(e => e.includes('Карта ОПР') && e.includes('несуществующее подразделение')));
+rawOprCards[0].department_id = savedOprDept;
+storage.saveOprCardsRaw(rawOprCards);
+assert.equal(storage.verifyDataIntegrity().valid, true);
+
+// Referential integrity: corrupt measure card link
+const rawMeasures = storage.getOprMeasuresRaw();
+const savedMeasureCardId = rawMeasures[0].opr_card_id;
+rawMeasures[0].opr_card_id = 'ghost-opr-card';
+storage.saveOprMeasuresRaw(rawMeasures);
+const brokenMeasure = storage.verifyDataIntegrity();
+assert.equal(brokenMeasure.valid, false);
+assert.ok(brokenMeasure.errors.some(e => e.includes('Мероприятие ОПР') && e.includes('несуществующую карту')));
+rawMeasures[0].opr_card_id = savedMeasureCardId;
+storage.saveOprMeasuresRaw(rawMeasures);
+assert.equal(storage.verifyDataIntegrity().valid, true);
+
+// Module toggle: disable opr
+setModuleState('opr', false);
+assert.equal(storage.isModuleEnabled('opr'), false);
+assert.throws(
+  () =>
+    storage.createOprCard({
+      card_number: 'BLOCKED-1',
+      legal_entity_id: testLe.id,
+      department_id: testDept.id,
+      position_id: testPos.id,
+      hazards: [],
+    }),
+  /Модуль ОПР отключён/
+);
+assert.throws(
+  () =>
+    storage.createOprMeasure({
+      opr_card_id: oprCard1.id,
+      measure_title: 'Тест',
+    }),
+  /Модуль ОПР отключён/
+);
+assert.ok(storage.getOprCardsRaw().length >= 2); // Data preserved
+setModuleState('opr', true);
+assert.equal(storage.isModuleEnabled('opr'), true);
+
+// Backup and restore round-trip for OPR
+const backupStage7 = JSON.parse(storage.createBackup('test-stage7'));
+assert.ok(backupStage7.counts.opr_cards >= 2);
+assert.ok(backupStage7.counts.opr_measures >= 1);
+assert.ok(Array.isArray(backupStage7.data.opr_cards) && backupStage7.data.opr_cards.length >= 2);
+assert.ok(Array.isArray(backupStage7.data.opr_measures) && backupStage7.data.opr_measures.length >= 1);
+
+// Add temporary card, then restore -> temporary card gone, integrity valid
+storage.createOprCard({
+  card_number: 'ОПР-TEMP',
+  legal_entity_id: testLe.id,
+  department_id: testDept.id,
+  position_id: testPos.id,
+  hazards: [],
+});
+assert.ok(storage.getOprCardsRaw().some(c => c.card_number === 'ОПР-TEMP'));
+
+const restoreReport7 = storage.restoreFromBackup(JSON.stringify(backupStage7));
+assert.equal(restoreReport7.valid, true);
+assert.equal(storage.getOprCardsRaw().some(c => c.card_number === 'ОПР-TEMP'), false);
+assert.ok(storage.getOprCardsRaw().some(c => c.card_number === 'ОПР-001'));
+assert.equal(storage.verifyDataIntegrity().valid, true);
+assert.equal(storage.isModuleEnabled('opr'), true);
+
+console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–7 УСПЕШНО ПРОЙДЕНЫ (21/21)!');
 
 

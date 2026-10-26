@@ -17,6 +17,13 @@ import {
   SoutImportRowResult,
   SoutImportPreviewData,
   SOUT_FACTOR_LABELS_RU,
+  OprCard,
+  OprHazard,
+  OprMeasureItem,
+  OprImportRowResult,
+  OprImportPreviewData,
+  RiskLevel,
+  RISK_LEVEL_LABELS_RU,
 } from '../types';
 import {
   validateInn,
@@ -652,6 +659,391 @@ function soutCardToRow(c: SoutCard): string[] {
     sanitizeCell(c.declaration_active ? 'да' : 'нет'),
     sanitizeCell(c.declaration_number || ''),
   ];
+}
+
+// ===============================================
+// Модуль «ОПР» (Этап 7, Приказ 776н)
+// ===============================================
+
+export const OPR_HEADERS = [
+  'Юридическое лицо',
+  'Подразделение',
+  'Должность',
+  'Номер карты ОПР',
+  'Рабочее место (уточнение)',
+  'Дата оценки',
+  'Методика оценки',
+  'Состав комиссии',
+  'Идентифицированные опасности',
+  'Максимальный балл риска',
+  'Итоговый уровень риска',
+];
+
+export const OPR_ALIASES: Record<string, string> = {
+  'юридическое лицо': 'legal_entity',
+  'юрлицо': 'legal_entity',
+  'организация': 'legal_entity',
+  'подразделение': 'department',
+  'отдел': 'department',
+  'структурное подразделение': 'department',
+  'должность': 'position',
+  'профессия': 'position',
+  'номер карты опр': 'card_number',
+  'номер карты': 'card_number',
+  '№ карты опр': 'card_number',
+  '№ карты': 'card_number',
+  'карта опр': 'card_number',
+  'рабочее место (уточнение)': 'workplace_label',
+  'рабочее место': 'workplace_label',
+  'дата оценки': 'assessment_date',
+  'дата': 'assessment_date',
+  'методика оценки': 'assessment_method',
+  'методика': 'assessment_method',
+  'состав комиссии': 'commission_members',
+  'комиссия': 'commission_members',
+  'идентифицированные опасности': 'hazards',
+  'опасности': 'hazards',
+  'максимальный балл риска': 'overall_risk_score',
+  'балл риска': 'overall_risk_score',
+  'итоговый уровень риска': 'overall_risk_level',
+  'уровень риска': 'overall_risk_level',
+};
+
+export function mapOprHeaders(rawHeaders: string[]): {
+  mapping: Record<number, string>;
+  problems: string[];
+} {
+  const mapping: Record<number, string> = {};
+  const problems: string[] = [];
+  const foundFields = new Set<string>();
+
+  rawHeaders.forEach((raw, idx) => {
+    const clean = String(raw || '').trim().toLowerCase();
+    if (OPR_ALIASES[clean]) {
+      const field = OPR_ALIASES[clean];
+      mapping[idx] = field;
+      foundFields.add(field);
+    }
+  });
+
+  const required = ['legal_entity', 'department', 'position', 'card_number'];
+  for (const req of required) {
+    if (!foundFields.has(req)) {
+      problems.push(`Отсутствует обязательная колонка для сопоставления: «${req}»`);
+    }
+  }
+
+  return { mapping, problems };
+}
+
+function oprCardToRow(c: OprCard): string[] {
+  const les = storage.listLegalEntities({ pageSize: 10000 }).items;
+  const depts = storage.getDepartmentsRaw();
+  const positions = storage.getPositionsRaw();
+  const le = les.find(l => l.id === c.legal_entity_id);
+  const dept = depts.find(d => d.id === c.department_id);
+  const pos = positions.find(p => p.id === c.position_id);
+  const hazardsStr = (c.hazards || [])
+    .map(h => `${h.category} - ${h.name} [Т:${h.severity}, В:${h.probability}, балл:${h.risk_score}]`)
+    .join('; ');
+
+  return [
+    sanitizeCell(le?.full_name || ''),
+    sanitizeCell(dept?.name || ''),
+    sanitizeCell(pos?.name || ''),
+    sanitizeCell(c.card_number),
+    sanitizeCell(c.workplace_label || ''),
+    sanitizeCell(formatDateForDisplay(c.assessment_date)),
+    sanitizeCell(c.assessment_method || ''),
+    sanitizeCell(c.commission_members || ''),
+    sanitizeCell(hazardsStr),
+    sanitizeCell(c.overall_risk_score),
+    sanitizeCell(RISK_LEVEL_LABELS_RU[c.overall_risk_level]?.name || c.overall_risk_level),
+  ];
+}
+
+export function exportOprToXLSX(cards: OprCard[], filename = 'opr_cards.xlsx'): void {
+  const rows: any[][] = [OPR_HEADERS];
+  for (const c of cards) {
+    rows.push(oprCardToRow(c));
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = OPR_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 18) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Карты ОПР');
+  XLSX.writeFile(wb, filename);
+}
+
+export function exportOprToCSV(cards: OprCard[], filename = 'opr_cards.csv'): void {
+  const lines: string[] = [];
+  lines.push(OPR_HEADERS.map(h => `"${h.replace(/"/g, '""')}"`).join(';'));
+  for (const c of cards) {
+    const row = oprCardToRow(c);
+    lines.push(row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(';'));
+  }
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function exportOprPlanToXLSX(measures: OprMeasureItem[], filename = 'opr_plan_measures.xlsx'): void {
+  const headers = [
+    'Карта ОПР',
+    'Организация',
+    'Подразделение / Должность',
+    'Мероприятие по снижению риска',
+    'Срок реализации',
+    'Ответственный',
+    'Статус выполнения',
+    'Ориентировочные затраты',
+    'Комментарий',
+  ];
+  const oprCards = storage.getOprCardsRaw();
+  const les = storage.listLegalEntities({ pageSize: 10000 }).items;
+  const depts = storage.getDepartmentsRaw();
+  const positions = storage.getPositionsRaw();
+
+  const rows: any[][] = [headers];
+  for (const m of measures) {
+    const card = oprCards.find(c => c.id === m.opr_card_id);
+    const le = card ? les.find(l => l.id === card.legal_entity_id) : undefined;
+    const dept = card ? depts.find(d => d.id === card.department_id) : undefined;
+    const pos = card ? positions.find(p => p.id === card.position_id) : undefined;
+    const statusLabel = m.status === 'completed' ? 'Выполнено' : m.status === 'in_progress' ? 'В работе' : 'Запланировано';
+
+    rows.push([
+      sanitizeCell(card?.card_number || ''),
+      sanitizeCell(le?.full_name || ''),
+      sanitizeCell(`${dept?.name || ''} / ${pos?.name || ''}`),
+      sanitizeCell(m.measure_title),
+      sanitizeCell(formatDateForDisplay(m.deadline)),
+      sanitizeCell(m.responsible_person || ''),
+      sanitizeCell(statusLabel),
+      sanitizeCell(m.cost_estimate || ''),
+      sanitizeCell(m.comment || ''),
+    ]);
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = headers.map(h => ({ wch: Math.max(h.length + 4, 18) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'План мероприятий ОПР');
+  XLSX.writeFile(wb, filename);
+}
+
+export function downloadOprTemplate(): void {
+  const exampleRow = [
+    'ООО Ромашка',
+    'Производственный цех',
+    'Станочник',
+    'ОПР-001',
+    'Станок №3',
+    '01.03.2024',
+    'Матричный метод (5x5)',
+    'Иванов И.И., Петров П.П.',
+    'Механическая - Движущиеся детали оборудования [Т:3, В:3, балл:9]',
+    '9',
+    'Умеренный (допустимый)',
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([OPR_HEADERS, exampleRow]);
+  ws['!cols'] = OPR_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 18) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Карты ОПР');
+  XLSX.writeFile(wb, 'template_opr.xlsx');
+}
+
+export function parseOprHazards(raw: string | undefined): OprHazard[] {
+  if (!raw) return [];
+  const s = String(raw).trim();
+  if (!s) return [];
+  const parts = s.split(/[;\n]+/).map(p => p.trim()).filter(Boolean);
+  const result: OprHazard[] = [];
+  for (const part of parts) {
+    const m = /^(?:([^–\-]+?)\s*[-–]\s*)?([^\[:]+?)(?:\s*\[\s*Т\s*:\s*(\d+)\s*,\s*В\s*:\s*(\d+)(?:\s*,\s*балл\s*:\s*\d+)?\s*\]|\s*:\s*(\d+)\s*,\s*(\d+))?$/i.exec(part);
+    if (m) {
+      const category = (m[1] || 'Прочая').trim();
+      const name = m[2].trim();
+      let sev = parseInt(m[3] || m[5] || '2', 10);
+      let prob = parseInt(m[4] || m[6] || '2', 10);
+      if (isNaN(sev) || sev < 1 || sev > 5) sev = 2;
+      if (isNaN(prob) || prob < 1 || prob > 5) prob = 2;
+      const score = sev * prob;
+      const level: RiskLevel = score <= 4 ? 'low' : score <= 9 ? 'moderate' : score <= 15 ? 'high' : 'unacceptable';
+      result.push({
+        id: `hz_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        category,
+        name,
+        severity: sev,
+        probability: prob,
+        risk_score: score,
+        risk_level: level,
+      });
+    } else {
+      const score = 4;
+      result.push({
+        id: `hz_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        category: 'Прочая',
+        name: part,
+        severity: 2,
+        probability: 2,
+        risk_score: score,
+        risk_level: 'low',
+      });
+    }
+  }
+  return result;
+}
+
+export function generateOprPreview(
+  rawRows: any[][],
+  mapping: Record<number, string>,
+  existingCards: OprCard[],
+  mode: 'add' | 'update'
+): OprImportPreviewData {
+  const results: OprImportRowResult[] = [];
+  const les = storage.listLegalEntities({ pageSize: 10000 }).items;
+  const depts = storage.getDepartmentsRaw();
+  const positions = storage.getPositionsRaw();
+
+  rawRows.forEach((row, i) => {
+    const rowNum = i + 2;
+    const rec: Record<string, any> = {};
+
+    Object.entries(mapping).forEach(([colIdx, key]) => {
+      const idx = parseInt(colIdx, 10);
+      rec[key] = row[idx];
+    });
+
+    const leQuery = String(rec.legal_entity || '').trim();
+    const deptQuery = String(rec.department || '').trim();
+    const posQuery = String(rec.position || '').trim();
+    const cardNumber = String(rec.card_number || '').trim();
+    const label = String(rec.workplace_label || '').trim();
+    const method = String(rec.assessment_method || '').trim() || 'Матричный метод (5x5)';
+    const commission = String(rec.commission_members || '').trim();
+
+    const title = cardNumber ? `Карта ОПР № ${cardNumber}` : '(без номера)';
+
+    const res: OprImportRowResult = {
+      row: rowNum,
+      action: 'add',
+      title,
+      errors: [],
+      warnings: [],
+      changes: [],
+      data: {
+        legal_entity_name: leQuery,
+        department_name: deptQuery,
+        position_name: posQuery,
+        card_number: cardNumber,
+        workplace_label: label,
+        assessment_method: method,
+        commission_members: commission,
+        hazards_raw: String(rec.hazards || '').trim(),
+      },
+    };
+
+    if (!leQuery) res.errors.push('Не указано юридическое лицо.');
+    if (!deptQuery) res.errors.push('Не указано структурное подразделение.');
+    if (!posQuery) res.errors.push('Не указана должность.');
+    if (!cardNumber) res.errors.push('Не указан номер карты ОПР.');
+
+    // Дата оценки
+    if (rec.assessment_date !== undefined && String(rec.assessment_date).trim() !== '') {
+      const parsed = parseExcelDate(rec.assessment_date);
+      if (parsed) {
+        try {
+          validateDateNotFuture(parsed, 'Дата оценки');
+          res.data.assessment_date = parsed;
+        } catch (e: any) {
+          res.errors.push(e.message);
+        }
+      }
+    }
+
+    // Сопоставление с юридическим лицом
+    let targetLe: LegalEntity | undefined;
+    if (leQuery) {
+      targetLe = les.find(
+        l =>
+          l.status === 'active' &&
+          (l.inn === leQuery ||
+            ciCompare(l.full_name) === ciCompare(leQuery) ||
+            ciCompare(l.short_name || '') === ciCompare(leQuery))
+      );
+      if (!targetLe) {
+        res.errors.push(`Юридическое лицо «${leQuery}» не найдено в базе.`);
+      }
+    }
+
+    if (res.errors.length > 0) {
+      res.action = 'reject';
+      results.push(res);
+      return;
+    }
+
+    if (targetLe) {
+      const targetDept = depts.find(
+        d =>
+          d.legal_entity_id === targetLe!.id &&
+          ciCompare(d.name) === ciCompare(deptQuery) &&
+          d.status === 'active'
+      );
+      if (!targetDept) {
+        res.warnings.push(`Подразделение «${deptQuery}» отсутствует — будет создано автоматически.`);
+      }
+
+      const posNorm = posQuery.toLowerCase().replace(/\s+/g, ' ').trim();
+      const targetPos = positions.find(
+        p => p.normalized_name === posNorm && p.status === 'active'
+      );
+      if (!targetPos) {
+        res.warnings.push(`Должность «${posQuery}» отсутствует в справочнике — будет создана.`);
+      }
+
+      // Идентификация: номер карты ОПР уникален в пределах юридического лица
+      const existingMatch = existingCards.find(
+        c =>
+          c.status === 'active' &&
+          c.legal_entity_id === targetLe!.id &&
+          ciCompare(c.card_number) === ciCompare(cardNumber)
+      );
+
+      if (existingMatch) {
+        if (mode === 'update') {
+          res.action = 'update';
+          res.changes.push(`Карта № ${cardNumber} найдена в организации. Данные будут обновлены.`);
+        } else {
+          res.action = 'skip';
+          res.warnings.push(`Карта № ${cardNumber} уже существует в этой организации — строка будет пропущена.`);
+        }
+      } else {
+        res.action = 'add';
+      }
+    }
+
+    results.push(res);
+  });
+
+  const summary = {
+    total: results.length,
+    add: results.filter(r => r.action === 'add').length,
+    update: results.filter(r => r.action === 'update').length,
+    skip: results.filter(r => r.action === 'skip').length,
+    reject: results.filter(r => r.action === 'reject').length,
+  };
+
+  return {
+    results,
+    structure_errors: [],
+    summary,
+  };
 }
 
 export function exportToXLSX(entities: LegalEntity[], filename = 'legal_entities.xlsx'): void {

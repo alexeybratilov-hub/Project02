@@ -18,6 +18,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const soutActive = soutCardsRaw.filter(c => c.status === 'active');
   const soutHarmful = soutActive.filter(c => ['3.1', '3.2', '3.3', '3.4', '4'].includes(c.final_class)).length;
 
+  const oprEnabled = storage.isModuleEnabled('opr');
+  const oprCardsRaw = oprEnabled ? storage.getOprCardsRaw() : [];
+  const oprActive = oprCardsRaw.filter(c => c.status === 'active');
+  const oprHighOrUnacceptable = oprActive.filter(
+    c => c.overall_risk_level === 'high' || c.overall_risk_level === 'unacceptable'
+  ).length;
+
   const widgets = [
     {
       id: 'legal_entities',
@@ -55,13 +62,25 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           },
         ]
       : []),
+    ...(oprEnabled
+      ? [
+          {
+            id: 'opr',
+            title: 'Оценка рисков (776н)',
+            value: oprActive.length,
+            caption: `карт; высокий/недопустимый риск: ${oprHighOrUnacceptable}`,
+            empty_hint: 'Пока нет карт ОПР — создайте первую или импортируйте из Excel.',
+            onClick: () => onNavigate('opr'),
+          },
+        ]
+      : []),
   ];
 
   return (
     <div>
       <h1>Система автоматизации охраны труда</h1>
       <p style={{ color: '#4b5563', marginBottom: '1.25rem' }}>
-        Приложение на этапе разработки (этап 4 — поимённый список работников). Показатели ниже — фактические данные из базы.
+        Приложение на этапе разработки (этап 7 — оценка профессиональных рисков по Приказу 776н). Показатели ниже — фактические данные из базы.
       </p>
 
       <div className="widgets">
@@ -95,12 +114,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
         <button className="btn" onClick={() => onNavigate('legal-entities-new')}>
           + Создать юридическое лицо
         </button>
+        {oprEnabled && (
+          <button className="btn" onClick={() => onNavigate('opr-new')}>
+            + Создать карту ОПР
+          </button>
+        )}
         <button className="btn secondary" onClick={() => onNavigate('employees-import')}>
           Импорт работников из Excel
         </button>
         <button className="btn secondary" onClick={() => onNavigate('contingent-import')}>
           Импорт контингента из Excel
         </button>
+        {oprEnabled && (
+          <button className="btn secondary" onClick={() => onNavigate('opr-import')}>
+            Импорт карт ОПР
+          </button>
+        )}
         <button className="btn secondary" onClick={() => onNavigate('dictionaries')}>
           Справочники
         </button>

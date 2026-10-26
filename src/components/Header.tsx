@@ -7,6 +7,7 @@ interface HeaderProps {
   currentLe: LegalEntity | null;
   onClearCurrentLe: () => void;
   soutEnabled?: boolean;
+  oprEnabled?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -14,7 +15,8 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigate,
   currentLe,
   onClearCurrentLe,
-  soutEnabled = false,
+  soutEnabled = true,
+  oprEnabled = true,
 }) => {
   return (
     <header>
@@ -71,6 +73,14 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={() => onNavigate('sout')}
           >
             СОУТ
+          </button>
+        )}
+        {oprEnabled && (
+          <button
+            className={currentView.startsWith('opr') ? 'active' : ''}
+            onClick={() => onNavigate('opr')}
+          >
+            ОПР
           </button>
         )}
         <button

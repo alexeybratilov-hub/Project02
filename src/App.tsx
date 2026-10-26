@@ -18,6 +18,10 @@ import { SoutList } from './components/SoutList';
 import { SoutForm } from './components/SoutForm';
 import { SoutCardView } from './components/SoutCardView';
 import { SoutImport } from './components/SoutImport';
+import { OprList } from './components/OprList';
+import { OprForm } from './components/OprForm';
+import { OprCardView } from './components/OprCardView';
+import { OprImport } from './components/OprImport';
 import { DictionariesView } from './components/DictionariesView';
 import { AuditLogView } from './components/AuditLogView';
 import { BackupView } from './components/BackupView';
@@ -66,6 +70,14 @@ export const App: React.FC = () => {
         setCurrentView('sout');
       } else if (hash === 'sout-new' || hash === 'sout-edit' || hash === 'sout-import') {
         setCurrentView(hash);
+      } else if (hash.startsWith('opr/')) {
+        const id = hash.replace('opr/', '');
+        setCurrentView('opr-view');
+        setTargetId(id);
+      } else if (hash === 'opr') {
+        setCurrentView('opr');
+      } else if (hash === 'opr-new' || hash === 'opr-edit' || hash === 'opr-import') {
+        setCurrentView(hash);
       } else if (hash === 'dictionaries') {
         setCurrentView('dictionaries');
       } else if (hash === 'modules') {
@@ -91,6 +103,8 @@ export const App: React.FC = () => {
       window.location.hash = `employees/${id}`;
     } else if (view === 'sout-view' && id) {
       window.location.hash = `sout/${id}`;
+    } else if (view === 'opr-view' && id) {
+      window.location.hash = `opr/${id}`;
     } else if (view === 'home') {
       window.location.hash = '';
     } else {
@@ -110,6 +124,8 @@ export const App: React.FC = () => {
         onNavigate={handleNavigate}
         currentLe={currentLe}
         onClearCurrentLe={handleClearCurrentLe}
+        soutEnabled={storage.isModuleEnabled('sout')}
+        oprEnabled={storage.isModuleEnabled('opr')}
       />
 
       <main>
@@ -217,6 +233,23 @@ export const App: React.FC = () => {
         )}
 
         {currentView === 'sout-import' && <SoutImport onNavigate={handleNavigate} />}
+
+        {/* OPR (Stage 7) */}
+        {currentView === 'opr' && (
+          <OprList onNavigate={handleNavigate} filterLeId={targetId} />
+        )}
+
+        {currentView === 'opr-new' && <OprForm onNavigate={handleNavigate} />}
+
+        {currentView === 'opr-edit' && (
+          <OprForm id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'opr-view' && targetId && (
+          <OprCardView id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'opr-import' && <OprImport onNavigate={handleNavigate} />}
 
         {/* Dictionaries */}
         {currentView === 'dictionaries' && <DictionariesView />}

@@ -354,6 +354,104 @@ export interface SoutImportPreviewData {
   };
 }
 
+// ===============================================
+// Модуль «Оценка профессиональных рисков (ОПР)» (Этап 7, Приказ Минтруда 776н)
+// ===============================================
+
+export type RiskLevel = 'low' | 'moderate' | 'high' | 'unacceptable';
+
+export const RISK_LEVEL_LABELS_RU: Record<RiskLevel, { name: string; badgeClass: string; desc: string }> = {
+  low: {
+    name: 'Низкий (приемлемый)',
+    badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+    desc: 'Риск под контролем, срочных мероприятий не требуется.',
+  },
+  moderate: {
+    name: 'Умеренный (допустимый)',
+    badgeClass: 'bg-amber-100 text-amber-800 border-amber-300',
+    desc: 'Требуется периодический контроль и соблюдение правил безопасности.',
+  },
+  high: {
+    name: 'Высокий (существенный)',
+    badgeClass: 'bg-orange-100 text-orange-800 border-orange-300',
+    desc: 'Требуется разработка и реализация плана мероприятий по снижению риска.',
+  },
+  unacceptable: {
+    name: 'Недопустимый (критический)',
+    badgeClass: 'bg-rose-100 text-rose-800 border-rose-300',
+    desc: 'Требуются неотложные меры или приостановка работ до устранения опасности.',
+  },
+};
+
+export interface OprHazard {
+  id: string;
+  code?: string | null;
+  category: string; // Механическая, Электрическая, Термическая, Падение, Физическая, Химическая, Биологическая, Психофизиологическая, Прочая
+  name: string;
+  danger_source?: string | null;
+  severity: number; // 1..5
+  probability: number; // 1..5
+  risk_score: number; // 1..25
+  risk_level: RiskLevel;
+  existing_measures?: string | null;
+  recommended_measures?: string | null;
+}
+
+export interface OprCard {
+  id: string;
+  card_number: string; // Номер карты ОПР («ОПР-001»)
+  legal_entity_id: string;
+  department_id: string;
+  position_id: string;
+  contingent_record_id?: string | null;
+  workplace_label?: string | null;
+  assessment_date?: string | null; // YYYY-MM-DD
+  assessment_method: string; // Матричный метод 5х5 / Файна-Кинни
+  commission_members?: string | null;
+  hazards: OprHazard[];
+  overall_risk_score: number;
+  overall_risk_level: RiskLevel;
+  status: EntityStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OprMeasureItem {
+  id: string;
+  opr_card_id: string;
+  hazard_id?: string | null;
+  measure_title: string;
+  deadline?: string | null; // YYYY-MM-DD
+  responsible_person?: string | null;
+  status: 'planned' | 'in_progress' | 'completed';
+  cost_estimate?: string | null;
+  comment?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OprImportRowResult {
+  row: number;
+  action: 'add' | 'update' | 'skip' | 'reject';
+  title: string;
+  errors: string[];
+  warnings: string[];
+  changes: string[];
+  data: Record<string, string>;
+}
+
+export interface OprImportPreviewData {
+  results: OprImportRowResult[];
+  structure_errors: string[];
+  summary: {
+    total: number;
+    add: number;
+    update: number;
+    skip: number;
+    reject: number;
+  };
+}
+
 export interface BackupManifest {
   id: string;
   created_at: string;
@@ -367,6 +465,8 @@ export interface BackupManifest {
     employment_history?: number;
     sout_cards?: number;
     sout_familiarizations?: number;
+    opr_cards?: number;
+    opr_measures?: number;
     audit_logs: number;
   };
   data: {
@@ -378,6 +478,8 @@ export interface BackupManifest {
     employment_history?: EmploymentHistoryRecord[];
     sout_cards?: SoutCard[];
     sout_familiarizations?: SoutFamiliarization[];
+    opr_cards?: OprCard[];
+    opr_measures?: OprMeasureItem[];
     audit_logs: AuditLogItem[];
   };
 }
@@ -396,6 +498,9 @@ export interface DataIntegrityReport {
     employment_history: number;
     sout_cards: number;
     sout_familiarizations: number;
+    opr_cards?: number;
+    opr_measures?: number;
     audit_logs: number;
   };
 }
+
