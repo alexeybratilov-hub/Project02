@@ -354,8 +354,21 @@ class StorageService {
       .sort((a, b) => (b.start_date || b.created_at).localeCompare(a.start_date || a.created_at));
   }
 
+  // In-memory кэш журнала аудита: записи читаются часто (бэкапы, проверка целостности,
+  // UI), а сериализация/парсинг большого JSON при каждой записи создавала квадратичную
+  // деградацию. Кэш инвалидируется через saveAuditLogsRaw / прямую запись STORAGE_KEYS.AUDIT_LOG.
+  private auditLogsCache: AuditLogItem[] | null = null;
+
   public getAuditLogs(): AuditLogItem[] {
-    return loadFromStorage<AuditLogItem[]>(STORAGE_KEYS.AUDIT_LOG, []);
+    if (this.auditLogsCache === null) {
+      this.auditLogsCache = loadFromStorage<AuditLogItem[]>(STORAGE_KEYS.AUDIT_LOG, []);
+    }
+    return this.auditLogsCache;
+  }
+
+  public saveAuditLogsRaw(items: AuditLogItem[]): void {
+    this.auditLogsCache = items;
+    saveToStorage(STORAGE_KEYS.AUDIT_LOG, items);
   }
 
   public getWorkSchedules(): WorkSchedule[] {
@@ -402,7 +415,7 @@ class StorageService {
       comment: comment || null,
     };
     logs.unshift(item);
-    saveToStorage(STORAGE_KEYS.AUDIT_LOG, logs);
+    this.saveAuditLogsRaw(logs);
   }
 
   // --- Current Selected Legal Entity ---
@@ -3110,7 +3123,7 @@ class StorageService {
       saveToStorage(STORAGE_KEYS.PSYCHIATRIC_EXAMS, parsed.data.psychiatric_exams);
     }
     if (Array.isArray(parsed.data.audit_logs)) {
-      saveToStorage(STORAGE_KEYS.AUDIT_LOG, parsed.data.audit_logs);
+      this.saveAuditLogsRaw(parsed.data.audit_logs);
     }
 
 
