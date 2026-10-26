@@ -13,6 +13,10 @@ import {
   WorkConditionSubclass,
   ElectricalSafetyGroup,
   DataIntegrityReport,
+  SoutCard,
+  SoutFamiliarization,
+  SoutGuarantees,
+  SoutHarmfulFactor,
 } from '../types';
 import {
   normalizeText,
@@ -40,6 +44,8 @@ const STORAGE_KEYS = {
   SHIFT_PATTERNS: 'saot_shift_patterns',
   WORK_CONDITION_SUBCLASSES: 'saot_work_condition_subclasses',
   ELECTRICAL_SAFETY_GROUPS: 'saot_electrical_safety_groups',
+  SOUT_CARDS: 'saot_sout_cards',
+  SOUT_FAMILIARIZATIONS: 'saot_sout_familiarizations',
 };
 
 function generateUUID(): string {
@@ -136,6 +142,15 @@ const DEFAULT_MODULES: ModuleItem[] = [
     version: '0.1.0',
     enabled: true,
     requires_core: ['db', 'legal_entities', 'contingent'],
+  },
+  {
+    module_id: 'sout',
+    title: 'СОУТ',
+    description:
+      'Специальная оценка условий труда (426-ФЗ): карты СОУТ, классы условий труда, вредные факторы, гарантии и компенсации по ТК РФ (ст. 92, 117, 147, 222), сроки действия и декларация (ст. 8, 11), ознакомление под роспись (ст. 5), импорт/экспорт.',
+    version: '1.0.0',
+    enabled: false,
+    requires_core: ['db', 'legal_entities', 'contingent', 'employees'],
   },
 ];
 
@@ -246,6 +261,10 @@ class StorageService {
   }
 
   // --- Current Selected Legal Entity ---
+  public isModuleEnabled(moduleId: string): boolean {
+    return this.getModules().some(m => m.module_id === moduleId && m.enabled);
+  }
+
   public getCurrentLegalEntityId(): string | null {
     return localStorage.getItem(STORAGE_KEYS.CURRENT_LE);
   }
@@ -1455,7 +1474,19 @@ class StorageService {
 
   // --- Modules ---
   public getModules(): ModuleItem[] {
-    return loadFromStorage<ModuleItem[]>(STORAGE_KEYS.MODULES, DEFAULT_MODULES);
+    const stored = loadFromStorage<ModuleItem[]>(STORAGE_KEYS.MODULES, DEFAULT_MODULES);
+    // Миграция реестра: добавляем отсутствующие (новые) модули, сохраняя состояние существующих
+    let changed = false;
+    for (const def of DEFAULT_MODULES) {
+      if (!stored.some(m => m.module_id === def.module_id)) {
+        stored.push({ ...def });
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveToStorage(STORAGE_KEYS.MODULES, stored);
+    }
+    return stored;
   }
 
   public toggleModule(moduleId: string): void {
@@ -1464,7 +1495,456 @@ class StorageService {
     if (item) {
       item.enabled = !item.enabled;
       saveToStorage(STORAGE_KEYS.MODULES, modules);
+      this.addAudit(
+        'module',
+        moduleId,
+        'update',
+        null,
+        { module_id: moduleId, enabled: item.enabled },
+        item.enabled ? `Модуль «${item.title}» включён` : `Модуль «${item.title}» отключён (данные сохранены)`
+      );
     }
+  }
+
+  // ==============================
+  // Модуль «СОУТ» (Этап 6+, 426-ФЗ)
+  // ==============================
+
+  public getSoutCardsRaw(): SoutCard[] {
+    return loadFromStorage<SoutCard[]>(STORAGE_KEYS.SOUT_CARDS, []);
+  }
+
+  public saveSoutCardsRaw(items: SoutCard[]): void {
+    saveToStorage(STORAGE_KEYS.SOUT_CARDS, items);
+  }
+
+  public getSoutFamiliarizationsRaw(): SoutFamiliarization[] {
+    return loadFromStorage<SoutFamiliarization[]>(STORAGE_KEYS.SOUT_FAMILIARIZATIONS, []);
+  }
+
+  public saveSoutFamiliarizationsRaw(items: SoutFamiliarization[]): void {
+    saveToStorage(STORAGE_KEYS.SOUT_FAMILIARIZATIONS, items);
+  }
+
+  public static readonly SOUT_VALID_CLASSES = ['1', '2', '3.1', '3.2', '3.3', '3.4', '4'];
+
+  // Автоматический расчёт гарантий и компенсаций по ТК РФ для класса условий труда
+  public static computeGuarantees(finalClass: string): SoutGuarantees {
+    const c = finalClass;
+    const isHarm = (min: string) => {
+      const order = ['1', '2', '3.1', '3.2', '3.3', '3.4', '4'];
+      return order.indexOf(c) >= order.indexOf(min) && c !== '1' && c !== '2';
+    };
+    return {
+      // ст. 92 ТК РФ — сокращённая продолжительность рабочего времени (не более 36 ч) для 3.3, 3.4 и 4
+      reduced_hours: c === '3.3' || c === '3.4' || c === '4',
+      // ст. 117 ТК РФ — ежегодный дополнительный оплачиваемый отпуск не менее 7 календарных дней для 3.2–4
+      extra_vacation_days: isHarm('3.2') ? 7 : 0,
+      // ст. 147 ТК РФ — повышенная оплата труда не менее 4% для вредных (3.1–3.4) и опасных (4)
+      pay_increase_percent: isHarm('3.1') ? 4 : 0,
+      // ст. 222 ТК РФ — молоко/равноценные продукты при контакте с вредными веществами (химический фактор 3.1–4)
+      milk_issue: isHarm('3.1'),
+      early_pension: isHarm('3.2'),
+      ppe_issue: isHarm('3.1'),
+    };
+  }
+
+  // Расчёт срока действия карты: 5 лет со дня утверждения отчёта (ст. 8 426-ФЗ);
+  // бессрочно при зарегистрированной декларации (ст. 11 426-ФЗ)
+  public static computeSoutExpiry(
+    reportApprovedAt: string | null | undefined,
+    declarationActive: boolean
+  ): string | null {
+    if (declarationActive) return null; // бессрочная карта
+    if (!reportApprovedAt) return null;
+    const d = new Date(reportApprovedAt + 'T00:00:00');
+    if (isNaN(d.getTime())) return null;
+    d.setFullYear(d.getFullYear() + 5);
+    return d.toISOString().slice(0, 10);
+  }
+
+  private validateSoutRefs(data: { legal_entity_id: string; department_id: string; position_id: string }): void {
+    if (!data.legal_entity_id) throw new Error('Юридическое лицо обязательно для заполнения.');
+    if (!data.department_id) throw new Error('Подразделение обязательно для заполнения.');
+    if (!data.position_id) throw new Error('Должность обязательна для заполнения.');
+    const le = this.getLegalEntityById(data.legal_entity_id);
+    if (!le) throw new Error('Юридическое лицо не найдено.');
+    const dept = this.getDepartmentById(data.department_id);
+    if (!dept || dept.legal_entity_id !== data.legal_entity_id) {
+      throw new Error('Подразделение не принадлежит выбранному юридическому лицу.');
+    }
+    if (!this.getPositionById(data.position_id)) {
+      throw new Error('Должность не найдена в справочнике.');
+    }
+  }
+
+  public listSoutCards(params?: {
+    search?: string;
+    legal_entity_id?: string;
+    department_id?: string;
+    final_class?: string;
+    status?: EntityStatus;
+    page?: number;
+    pageSize?: number;
+  }): { items: SoutCard[]; total: number } {
+    const all = this.getSoutCardsRaw();
+    const status = params?.status || 'active';
+    let filtered = all.filter(c => c.status === status);
+
+    if (params?.legal_entity_id) {
+      filtered = filtered.filter(c => c.legal_entity_id === params.legal_entity_id);
+    }
+    if (params?.department_id) {
+      filtered = filtered.filter(c => c.department_id === params.department_id);
+    }
+    if (params?.final_class) {
+      filtered = filtered.filter(c => c.final_class === params.final_class);
+    }
+
+    const term = (params?.search || '').trim().toLowerCase();
+    if (term) {
+      const positions = this.getPositionsRaw();
+      const departments = this.getDepartmentsRaw();
+      filtered = filtered.filter(c => {
+        const pos = positions.find(p => p.id === c.position_id);
+        const dept = departments.find(d => d.id === c.department_id);
+        return (
+          c.card_number.toLowerCase().includes(term) ||
+          (pos && pos.name.toLowerCase().includes(term)) ||
+          (dept && dept.name.toLowerCase().includes(term)) ||
+          (c.workplace_label || '').toLowerCase().includes(term) ||
+          (c.protocol_number || '').toLowerCase().includes(term)
+        );
+      });
+    }
+
+    filtered.sort((a, b) => ciCompare(a.card_number).localeCompare(ciCompare(b.card_number)));
+
+    const total = filtered.length;
+    const page = Math.max(1, params?.page || 1);
+    const pageSize = params?.pageSize || 30;
+    const start = (page - 1) * pageSize;
+    return { items: filtered.slice(start, start + pageSize), total };
+  }
+
+  public getSoutCardById(id: string): SoutCard | null {
+    return this.getSoutCardsRaw().find(c => c.id === id) || null;
+  }
+
+  public createSoutCard(data: {
+    card_number: string;
+    legal_entity_id: string;
+    department_id: string;
+    position_id: string;
+    workplace_label?: string | null;
+    is_analogous?: boolean;
+    analogous_basis?: string | null;
+    factors?: SoutHarmfulFactor[];
+    final_class: string;
+    employees_count?: number;
+    women_count?: number;
+    minors_count?: number;
+    disabled_count?: number;
+    guarantees?: Partial<SoutGuarantees>;
+    measurement_org?: string | null;
+    protocol_number?: string | null;
+    report_approved_at?: string | null;
+    declaration_active?: boolean;
+    declaration_number?: string | null;
+  }): SoutCard {
+    if (!this.isModuleEnabled('sout')) {
+      throw new Error('Модуль СОУТ отключён. Включите модуль в реестре модулей.');
+    }
+    const card_number = normalizeText(data.card_number);
+    if (!card_number) throw new Error('Номер карты СОУТ обязателен для заполнения.');
+    if (!StorageService.SOUT_VALID_CLASSES.includes(data.final_class)) {
+      throw new Error(`Недопустимый класс условий труда «${data.final_class}». Допустимы: ${StorageService.SOUT_VALID_CLASSES.join(', ')}.`);
+    }
+    this.validateSoutRefs(data);
+
+    const all = this.getSoutCardsRaw();
+    const dup = all.find(
+      c => c.status === 'active' && c.legal_entity_id === data.legal_entity_id && ciCompare(c.card_number) === ciCompare(card_number)
+    );
+    if (dup) {
+      throw new Error(`Карта СОУТ № «${card_number}» уже зарегистрирована в данном юридическом лице.`);
+    }
+
+    const now = nowISO();
+    const auto = StorageService.computeGuarantees(data.final_class);
+    const guarantees: SoutGuarantees = { ...auto, ...(data.guarantees || {}) };
+    const declarationActive = Boolean(data.declaration_active);
+
+    const card: SoutCard = {
+      id: generateUUID(),
+      card_number,
+      legal_entity_id: data.legal_entity_id,
+      department_id: data.department_id,
+      position_id: data.position_id,
+      workplace_label: normalizeText(data.workplace_label),
+      is_analogous: Boolean(data.is_analogous),
+      analogous_basis: normalizeText(data.analogous_basis),
+      factors: Array.isArray(data.factors) ? data.factors : [],
+      final_class: data.final_class,
+      employees_count: Math.max(0, Number(data.employees_count) || 0),
+      women_count: Math.max(0, Number(data.women_count) || 0),
+      minors_count: Math.max(0, Number(data.minors_count) || 0),
+      disabled_count: Math.max(0, Number(data.disabled_count) || 0),
+      guarantees,
+      measurement_org: normalizeText(data.measurement_org),
+      protocol_number: normalizeText(data.protocol_number),
+      report_approved_at: data.report_approved_at || null,
+      expires_at: StorageService.computeSoutExpiry(data.report_approved_at, declarationActive),
+      declaration_active: declarationActive,
+      declaration_number: declarationActive ? normalizeText(data.declaration_number) : null,
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    };
+
+    all.push(card);
+    this.saveSoutCardsRaw(all);
+    this.addAudit('sout_card', card.id, 'sout_create', null, { ...card });
+    return card;
+  }
+
+  public updateSoutCard(
+    id: string,
+    data: Partial<{
+      card_number: string;
+      legal_entity_id: string;
+      department_id: string;
+      position_id: string;
+      workplace_label?: string | null;
+      is_analogous: boolean;
+      analogous_basis?: string | null;
+      factors: SoutHarmfulFactor[];
+      final_class: string;
+      employees_count: number;
+      women_count: number;
+      minors_count: number;
+      disabled_count: number;
+      guarantees: Partial<SoutGuarantees>;
+      measurement_org?: string | null;
+      protocol_number?: string | null;
+      report_approved_at?: string | null;
+      declaration_active: boolean;
+      declaration_number?: string | null;
+    }>
+  ): SoutCard {
+    const all = this.getSoutCardsRaw();
+    const index = all.findIndex(c => c.id === id);
+    if (index === -1) throw new Error('Карта СОУТ не найдена.');
+    const existing = all[index];
+    const before = { ...existing };
+
+    if (data.final_class !== undefined && !StorageService.SOUT_VALID_CLASSES.includes(data.final_class)) {
+      throw new Error(`Недопустимый класс условий труда «${data.final_class}».`);
+    }
+
+    const mergedRefs = {
+      legal_entity_id: data.legal_entity_id ?? existing.legal_entity_id,
+      department_id: data.department_id ?? existing.department_id,
+      position_id: data.position_id ?? existing.position_id,
+    };
+    this.validateSoutRefs(mergedRefs);
+
+    const card_number = data.card_number !== undefined ? normalizeText(data.card_number) : existing.card_number;
+    if (!card_number) throw new Error('Номер карты СОУТ обязателен для заполнения.');
+    const dup = all.find(
+      c => c.id !== id && c.status === 'active' && c.legal_entity_id === mergedRefs.legal_entity_id && ciCompare(c.card_number) === ciCompare(card_number)
+    );
+    if (dup) throw new Error(`Карта СОУТ № «${card_number}» уже зарегистрирована в данном юридическом лице.`);
+
+    const finalClass = data.final_class ?? existing.final_class;
+    const auto = StorageService.computeGuarantees(finalClass);
+    let guarantees: SoutGuarantees;
+    if (data.final_class !== undefined && data.final_class !== existing.final_class) {
+      // при смене класса гарантии пересчитываются автоматически
+      guarantees = { ...auto, ...(data.guarantees || {}) };
+    } else {
+      guarantees = { ...existing.guarantees, ...(data.guarantees || {}) };
+    }
+
+    const declarationActive = data.declaration_active ?? existing.declaration_active;
+    const reportApprovedAt = data.report_approved_at !== undefined ? data.report_approved_at : existing.report_approved_at;
+
+    const updated: SoutCard = {
+      ...existing,
+      ...mergedRefs,
+      card_number,
+      workplace_label: data.workplace_label !== undefined ? normalizeText(data.workplace_label) : existing.workplace_label,
+      is_analogous: data.is_analogous ?? existing.is_analogous,
+      analogous_basis: data.analogous_basis !== undefined ? normalizeText(data.analogous_basis) : existing.analogous_basis,
+      factors: Array.isArray(data.factors) ? data.factors : existing.factors,
+      final_class: finalClass,
+      employees_count: data.employees_count !== undefined ? Math.max(0, Number(data.employees_count) || 0) : existing.employees_count,
+      women_count: data.women_count !== undefined ? Math.max(0, Number(data.women_count) || 0) : existing.women_count,
+      minors_count: data.minors_count !== undefined ? Math.max(0, Number(data.minors_count) || 0) : existing.minors_count,
+      disabled_count: data.disabled_count !== undefined ? Math.max(0, Number(data.disabled_count) || 0) : existing.disabled_count,
+      guarantees,
+      measurement_org: data.measurement_org !== undefined ? normalizeText(data.measurement_org) : existing.measurement_org,
+      protocol_number: data.protocol_number !== undefined ? normalizeText(data.protocol_number) : existing.protocol_number,
+      report_approved_at: reportApprovedAt || null,
+      declaration_active: declarationActive,
+      declaration_number: declarationActive
+        ? (data.declaration_number !== undefined ? normalizeText(data.declaration_number) : existing.declaration_number)
+        : null,
+      expires_at: StorageService.computeSoutExpiry(reportApprovedAt, declarationActive),
+      updated_at: nowISO(),
+    };
+
+    all[index] = updated;
+    this.saveSoutCardsRaw(all);
+    this.addAudit('sout_card', updated.id, 'sout_update', before, { ...updated });
+    return updated;
+  }
+
+  public archiveSoutCard(id: string): SoutCard {
+    const all = this.getSoutCardsRaw();
+    const index = all.findIndex(c => c.id === id);
+    if (index === -1) throw new Error('Карта СОУТ не найдена.');
+    const existing = all[index];
+    if (existing.status === 'archived') throw new Error('Карта СОУТ уже в архиве.');
+    const before = { ...existing };
+    existing.status = 'archived';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveSoutCardsRaw(all);
+    this.addAudit('sout_card', existing.id, 'sout_archive', before, { ...existing });
+    return existing;
+  }
+
+  public restoreSoutCard(id: string): SoutCard {
+    const all = this.getSoutCardsRaw();
+    const index = all.findIndex(c => c.id === id);
+    if (index === -1) throw new Error('Карта СОУТ не найдена.');
+    const existing = all[index];
+    if (existing.status === 'active') throw new Error('Карта СОУТ уже активна.');
+    const before = { ...existing };
+    existing.status = 'active';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveSoutCardsRaw(all);
+    this.addAudit('sout_card', existing.id, 'sout_restore', before, { ...existing });
+    return existing;
+  }
+
+  // --- Ознакомление работников под роспись (ст. 5 426-ФЗ) ---
+  public listSoutFamiliarizations(cardId: string): SoutFamiliarization[] {
+    return this.getSoutFamiliarizationsRaw()
+      .filter(f => f.sout_card_id === cardId)
+      .sort((a, b) => (b.signed_at || '').localeCompare(a.signed_at || ''));
+  }
+
+  public familiarizeSoutCard(cardId: string, employeeId: string, signedAt?: string, comment?: string | null): SoutFamiliarization {
+    if (!this.isModuleEnabled('sout')) {
+      throw new Error('Модуль СОУТ отключён. Включите модуль в реестре модулей.');
+    }
+    const card = this.getSoutCardById(cardId);
+    if (!card) throw new Error('Карта СОУТ не найдена.');
+    const employee = this.getEmployeesRaw().find(e => e.id === employeeId);
+    if (!employee) throw new Error('Работник не найден.');
+    if (employee.legal_entity_id !== card.legal_entity_id) {
+      throw new Error('Работник относится к другому юридическому лицу — ознакомление запрещено (изоляция организаций).');
+    }
+
+    const all = this.getSoutFamiliarizationsRaw();
+    const dup = all.find(f => f.sout_card_id === cardId && f.employee_id === employeeId);
+    if (dup) throw new Error('Работник уже ознакомлен с картой СОУТ под роспись.');
+
+    const date = signedAt || new Date().toISOString().slice(0, 10);
+    validateDateNotFuture(date, 'Дата ознакомления');
+
+    const rec: SoutFamiliarization = {
+      id: generateUUID(),
+      sout_card_id: cardId,
+      employee_id: employeeId,
+      signed_at: date,
+      comment: normalizeText(comment),
+      created_at: nowISO(),
+    };
+    all.push(rec);
+    this.saveSoutFamiliarizationsRaw(all);
+
+    const empName = `${employee.last_name} ${employee.first_name}`;
+    this.addAudit('sout_familiarization', rec.id, 'sout_familiarize', null, { ...rec }, `Ознакомление работника «${empName}» с картой СОУТ № ${card.card_number} (ст. 5 426-ФЗ)`);
+    return rec;
+  }
+
+  public removeSoutFamiliarization(id: string): void {
+    const all = this.getSoutFamiliarizationsRaw();
+    const index = all.findIndex(f => f.id === id);
+    if (index === -1) throw new Error('Запись ознакомления не найдена.');
+    const before = { ...all[index] };
+    all.splice(index, 1);
+    this.saveSoutFamiliarizationsRaw(all);
+    this.addAudit('sout_familiarization', before.id, 'update', before, null, 'Отмена отметки об ознакомлении с картой СОУТ');
+  }
+
+  // --- Транзакционное применение импорта карт СОУТ ---
+  public commitSoutImport(
+    records: Array<{
+      card_number: string;
+      legal_entity_id: string;
+      department_id: string;
+      position_id: string;
+      workplace_label?: string | null;
+      is_analogous?: boolean;
+      analogous_basis?: string | null;
+      factors?: SoutHarmfulFactor[];
+      final_class: string;
+      employees_count?: number;
+      women_count?: number;
+      minors_count?: number;
+      disabled_count?: number;
+      measurement_org?: string | null;
+      protocol_number?: string | null;
+      report_approved_at?: string | null;
+      declaration_active?: boolean;
+      declaration_number?: string | null;
+    }>,
+    mode: 'add' | 'update'
+  ): { added: number; updated: number; skipped: number; rejected: number } {
+    if (!this.isModuleEnabled('sout')) {
+      throw new Error('Модуль СОУТ отключён. Включите модуль в реестре модулей.');
+    }
+    if (records.length > 0) {
+      this.createBackup('auto-import-sout');
+    }
+    let added = 0;
+    let updated = 0;
+    let skipped = 0;
+    let rejected = 0;
+
+    for (const rec of records) {
+      try {
+        const existing = this.getSoutCardsRaw().find(
+          c =>
+            c.status === 'active' &&
+            c.legal_entity_id === rec.legal_entity_id &&
+            ciCompare(c.card_number) === ciCompare(rec.card_number)
+        );
+        if (existing) {
+          if (mode === 'update') {
+            this.updateSoutCard(existing.id, { ...rec });
+            updated++;
+          } else {
+            skipped++;
+          }
+        } else {
+          this.createSoutCard(rec);
+          added++;
+        }
+      } catch {
+        rejected++;
+      }
+    }
+
+    this.addAudit('database', 'local', 'sout_import', null, { added, updated, skipped, rejected },
+      `Импорт карт СОУТ: добавлено ${added}, обновлено ${updated}, пропущено ${skipped}, отклонено ${rejected}`);
+
+    return { added, updated, skipped, rejected };
   }
 
   // --- Backup & Restore ---
@@ -1480,6 +1960,8 @@ class StorageService {
         contingent: this.getContingentRaw().length,
         employees: this.getEmployeesRaw().length,
         employment_history: this.getEmploymentHistoryRaw().length,
+        sout_cards: this.getSoutCardsRaw().length,
+        sout_familiarizations: this.getSoutFamiliarizationsRaw().length,
         audit_logs: this.getAuditLogs().length,
       },
       data: {
@@ -1489,6 +1971,8 @@ class StorageService {
         contingent: this.getContingentRaw(),
         employees: this.getEmployeesRaw(),
         employment_history: this.getEmploymentHistoryRaw(),
+        sout_cards: this.getSoutCardsRaw(),
+        sout_familiarizations: this.getSoutFamiliarizationsRaw(),
         audit_logs: this.getAuditLogs(),
       },
     };
@@ -1549,6 +2033,12 @@ class StorageService {
     if (Array.isArray(parsed.data.employment_history)) {
       saveToStorage(STORAGE_KEYS.EMPLOYMENT_HISTORY, parsed.data.employment_history);
     }
+    if (Array.isArray(parsed.data.sout_cards)) {
+      saveToStorage(STORAGE_KEYS.SOUT_CARDS, parsed.data.sout_cards);
+    }
+    if (Array.isArray(parsed.data.sout_familiarizations)) {
+      saveToStorage(STORAGE_KEYS.SOUT_FAMILIARIZATIONS, parsed.data.sout_familiarizations);
+    }
     if (Array.isArray(parsed.data.audit_logs)) {
       saveToStorage(STORAGE_KEYS.AUDIT_LOG, parsed.data.audit_logs);
     }
@@ -1580,6 +2070,8 @@ class StorageService {
     const contingent = this.getContingentRaw();
     const employees = this.getEmployeesRaw();
     const history = this.getEmploymentHistoryRaw();
+    const soutCards = this.getSoutCardsRaw();
+    const soutFam = this.getSoutFamiliarizationsRaw();
     const logs = this.getAuditLogs();
 
     const errors: string[] = [];
@@ -1722,6 +2214,46 @@ class StorageService {
       }
     }
 
+    // 7. СОУТ verification (Stage 6+, module 'sout')
+    const soutCardMap = new Map(soutCards.map(c => [c.id, c]));
+    for (const c of soutCards) {
+      if (!c.card_number) {
+        errors.push(`Карта СОУТ (ID: ${c.id}) имеет пустой номер карты.`);
+      }
+      if (!c.legal_entity_id || !leMap.has(c.legal_entity_id)) {
+        errors.push(`Карта СОУТ № «${c.card_number}» (ID: ${c.id}) ссылается на несуществующее юридическое лицо (ID: ${c.legal_entity_id}).`);
+      }
+      const dept = deptMap.get(c.department_id);
+      if (!dept) {
+        errors.push(`Карта СОУТ № «${c.card_number}» (ID: ${c.id}) ссылается на несуществующее подразделение (ID: ${c.department_id}).`);
+      } else if (c.legal_entity_id && dept.legal_entity_id !== c.legal_entity_id) {
+        errors.push(`Карта СОУТ № «${c.card_number}» (ID: ${c.id}) ссылается на подразделение другого юридического лица.`);
+      }
+      if (!c.position_id || !posMap.has(c.position_id)) {
+        errors.push(`Карта СОУТ № «${c.card_number}» (ID: ${c.id}) ссылается на несуществующую должность (ID: ${c.position_id}).`);
+      }
+      if (!StorageService.SOUT_VALID_CLASSES.includes(c.final_class)) {
+        errors.push(`Карта СОУТ № «${c.card_number}» (ID: ${c.id}) содержит недопустимый класс условий труда «${c.final_class}».`);
+      }
+    }
+
+    // 8. SOUT familiarizations verification
+    const empMapForSout = empMap;
+    for (const f of soutFam) {
+      if (!f.sout_card_id || !soutCardMap.has(f.sout_card_id)) {
+        errors.push(`Запись ознакомления с картой СОУТ (ID: ${f.id}) ссылается на несуществующую карту (ID: ${f.sout_card_id}).`);
+      }
+      const emp = empMapForSout.get(f.employee_id);
+      if (!emp) {
+        errors.push(`Запись ознакомления с картой СОУТ (ID: ${f.id}) ссылается на несуществующего работника (ID: ${f.employee_id}).`);
+      } else {
+        const card = soutCardMap.get(f.sout_card_id);
+        if (card && emp.legal_entity_id !== card.legal_entity_id) {
+          errors.push(`Работник «${emp.last_name} ${emp.first_name}» ознакомлен с картой СОУТ другого юридического лица (запись ID: ${f.id}).`);
+        }
+      }
+    }
+
     return {
       valid: errors.length === 0,
       timestamp: nowISO(),
@@ -1734,6 +2266,8 @@ class StorageService {
         contingent: contingent.length,
         employees: employees.length,
         employment_history: history.length,
+        sout_cards: soutCards.length,
+        sout_familiarizations: soutFam.length,
         audit_logs: logs.length,
       },
     };

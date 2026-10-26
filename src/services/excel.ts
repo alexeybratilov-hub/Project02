@@ -11,6 +11,12 @@ import {
   EmployeeImportRowResult,
   Department,
   Position,
+  SoutCard,
+  SoutHarmfulFactor,
+  SoutHarmfulFactorType,
+  SoutImportRowResult,
+  SoutImportPreviewData,
+  SOUT_FACTOR_LABELS_RU,
 } from '../types';
 import {
   validateInn,

@@ -6,6 +6,7 @@ interface HeaderProps {
   onNavigate: (view: string, id?: string) => void;
   currentLe: LegalEntity | null;
   onClearCurrentLe: () => void;
+  soutEnabled?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -13,6 +14,7 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigate,
   currentLe,
   onClearCurrentLe,
+  soutEnabled = false,
 }) => {
   return (
     <header>
@@ -63,6 +65,14 @@ export const Header: React.FC<HeaderProps> = ({
         >
           Работники
         </button>
+        {soutEnabled && (
+          <button
+            className={currentView.startsWith('sout') ? 'active' : ''}
+            onClick={() => onNavigate('sout')}
+          >
+            СОУТ
+          </button>
+        )}
         <button
           className={currentView === 'dictionaries' ? 'active' : ''}
           onClick={() => onNavigate('dictionaries')}

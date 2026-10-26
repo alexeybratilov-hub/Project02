@@ -14,6 +14,10 @@ import { EmployeesList } from './components/EmployeesList';
 import { EmployeeCard } from './components/EmployeeCard';
 import { EmployeeForm } from './components/EmployeeForm';
 import { EmployeesImport } from './components/EmployeesImport';
+import { SoutList } from './components/SoutList';
+import { SoutForm } from './components/SoutForm';
+import { SoutCardView } from './components/SoutCardView';
+import { SoutImport } from './components/SoutImport';
 import { DictionariesView } from './components/DictionariesView';
 import { AuditLogView } from './components/AuditLogView';
 import { BackupView } from './components/BackupView';
@@ -54,6 +58,14 @@ export const App: React.FC = () => {
         setCurrentView('contingent');
       } else if (hash === 'employees') {
         setCurrentView('employees');
+      } else if (hash.startsWith('sout/')) {
+        const id = hash.replace('sout/', '');
+        setCurrentView('sout-view');
+        setTargetId(id);
+      } else if (hash === 'sout') {
+        setCurrentView('sout');
+      } else if (hash === 'sout-new' || hash === 'sout-edit' || hash === 'sout-import') {
+        setCurrentView(hash);
       } else if (hash === 'dictionaries') {
         setCurrentView('dictionaries');
       } else if (hash === 'modules') {
@@ -77,6 +89,8 @@ export const App: React.FC = () => {
       window.location.hash = `contingent/${id}`;
     } else if (view === 'employees-view' && id) {
       window.location.hash = `employees/${id}`;
+    } else if (view === 'sout-view' && id) {
+      window.location.hash = `sout/${id}`;
     } else if (view === 'home') {
       window.location.hash = '';
     } else {
