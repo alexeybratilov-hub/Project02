@@ -480,6 +480,8 @@ export interface BackupManifest {
     sout_familiarizations?: SoutFamiliarization[];
     opr_cards?: OprCard[];
     opr_measures?: OprMeasureItem[];
+    medical_cards?: MedicalExaminationCard[];
+    psychiatric_exams?: PsychiatricExamination[];
     audit_logs: AuditLogItem[];
   };
 }
@@ -500,7 +502,96 @@ export interface DataIntegrityReport {
     sout_familiarizations: number;
     opr_cards?: number;
     opr_measures?: number;
+    medical_cards?: number;
+    psychiatric_exams?: number;
     audit_logs: number;
   };
 }
 
+
+// ==================== ЭТАП 8: МЕДОСМОТРЫ И ПСИХИАТРИЧЕСКОЕ ОСВИДЕТЕЛЬСТВОВАНИЕ (29н/342н) ====================
+
+export type MedicalExamType = 'preliminary' | 'periodic' | 'pre_shift';
+
+export const MEDICAL_EXAM_TYPE_LABELS_RU: Record<MedicalExamType, string> = {
+  preliminary: 'Предварительный (при поступлении на работу)',
+  periodic: 'Периодический',
+  pre_shift: 'Предсменный (предрейсовый)',
+};
+
+export type MedicalConclusion = 'fit' | 'fit_restrictions' | 'unfit' | 'pending';
+
+export const MEDICAL_CONCLUSION_LABELS_RU: Record<MedicalConclusion, { name: string; badgeClass: string }> = {
+  fit: { name: 'Годен', badgeClass: 'badge-green' },
+  fit_restrictions: { name: 'Годен с ограничениями', badgeClass: 'badge-yellow' },
+  unfit: { name: 'Не годен', badgeClass: 'badge-red' },
+  pending: { name: 'Заключение не получено', badgeClass: 'badge-gray' },
+};
+
+export interface MedicalExaminationCard {
+  id: string;
+  card_number: string; // «МЕД-001», уникальна в пределах юрлица
+  legal_entity_id: string;
+  employee_id: string;
+  contingent_record_id?: string | null;
+  sout_card_id?: string | null; // основание направления (карта СОУТ)
+  exam_type: MedicalExamType;
+  referral_date?: string | null; // YYYY-MM-DD — дата выдачи направления
+  exam_date?: string | null; // YYYY-MM-DD — дата прохождения медосмотра
+  next_due_date?: string | null; // YYYY-MM-DD — срок следующего периодического медосмотра
+  clinic_name?: string | null;
+  doctor_fio?: string | null;
+  conclusion: MedicalConclusion;
+  conclusion_details?: string | null;
+  contraindications_found?: boolean;
+  status: EntityStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export type PsychiatricConclusion = 'fit' | 'unfit' | 'fit_restricted';
+
+export const PSYCHIATRIC_CONCLUSION_LABELS_RU: Record<PsychiatricConclusion, { name: string; badgeClass: string }> = {
+  fit: { name: 'Годен', badgeClass: 'badge-green' },
+  fit_restricted: { name: 'Годен с ограничениями', badgeClass: 'badge-yellow' },
+  unfit: { name: 'Не годен', badgeClass: 'badge-red' },
+};
+
+export interface PsychiatricExamination {
+  id: string;
+  legal_entity_id: string;
+  employee_id: string;
+  exam_date?: string | null; // YYYY-MM-DD
+  commission_members?: string | null;
+  conclusion: PsychiatricConclusion;
+  conclusion_protocol_number?: string | null;
+  valid_until?: string | null; // YYYY-MM-DD
+  basis?: string | null; // перечень работ (Приложение к 342н)
+  comment?: string | null;
+  status: EntityStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+
+export interface MedicalImportRowResult {
+  row: number;
+  action: 'add' | 'update' | 'skip' | 'reject';
+  title: string;
+  errors: string[];
+  warnings: string[];
+  changes: string[];
+  data: Record<string, string>;
+}
+
+export interface MedicalImportPreviewData {
+  results: MedicalImportRowResult[];
+  structure_errors: string[];
+  summary: {
+    total: number;
+    add: number;
+    update: number;
+    skip: number;
+    reject: number;
+  };
+}
