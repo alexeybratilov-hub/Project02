@@ -154,7 +154,7 @@ export const MedicalCardView: React.FC<MedicalCardViewProps> = ({ id, onNavigate
             <span className="text-xs text-slate-500 block">Работник:</span>
             {employee ? (
               <a
-                href={`#employees/${employee.id`}
+                href={`#employees/${employee.id}`}
                 onClick={e => {
                   e.preventDefault();
                   onNavigate('employees-view', employee.id);
@@ -218,7 +218,6 @@ export const MedicalCardView: React.FC<MedicalCardViewProps> = ({ id, onNavigate
           <span className={`px-3 py-1 rounded text-sm font-semibold border ${conclusionInfo.badgeClass}`}>
             {conclusionInfo.name}
           </span>
-          <span className="text-xs text-slate-500">{conclusionInfo.desc}</span>
         </div>
         <p className="text-sm text-slate-700 whitespace-pre-wrap">
           {card.conclusion_details || 'Подробности заключения не указаны.'}

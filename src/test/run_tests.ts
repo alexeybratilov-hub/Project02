@@ -914,4 +914,452 @@ assert.equal(storage.isModuleEnabled('opr'), true);
 
 console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–7 УСПЕШНО ПРОЙДЕНЫ (21/21)!');
 
+// 22. Medical examinations (Stage 8): card CRUD, date validations, links to LE/employee/contingent/SOUT
+console.log('[22/24] Тестирование карт медосмотров (Приказ 29н): CRUD, валидация дат и сроков, связи с СОУТ и контингентом...');
+
+import { mapMedicalHeaders, generateMedicalPreview, MEDICAL_HEADERS } from '../services/excel';
+
+// Disabled module blocks creation before validation
+assert.equal(storage.isModuleEnabled('medical'), false);
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'OFF-MED',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      exam_type: 'preliminary',
+      conclusion: 'pending',
+    }),
+  /Модуль «Медосмотры» отключён/
+);
+// Enable the module for further tests
+storage.toggleModule('medical');
+assert.equal(storage.isModuleEnabled('medical'), true);
+
+// Create preliminary exam card with pending conclusion (referral issued, exam not passed yet)
+const medCard1 = storage.createMedicalCard({
+  card_number: 'МЕД-001',
+  legal_entity_id: testLe.id,
+  employee_id: testEmp.employee.id,
+  contingent_record_id: testCont.id,
+  sout_card_id: card33.id,
+  exam_type: 'preliminary',
+  referral_date: '2024-03-01',
+  conclusion: 'pending',
+});
+assert.equal(medCard1.card_number, 'МЕД-001');
+assert.equal(medCard1.exam_type, 'preliminary');
+assert.equal(medCard1.conclusion, 'pending');
+assert.equal(medCard1.contingent_record_id, testCont.id);
+assert.equal(medCard1.sout_card_id, card33.id);
+assert.equal(medCard1.status, 'active');
+
+// Periodic exam passed with conclusion «Годен»
+const medCard2 = storage.createMedicalCard({
+  card_number: 'МЕД-002',
+  legal_entity_id: testLe.id,
+  employee_id: testEmp.employee.id,
+  exam_type: 'periodic',
+  referral_date: '2024-02-01',
+  exam_date: '2024-03-01',
+  next_due_date: '2026-03-01',
+  clinic_name: 'ГБУЗ «Центр профпатологии»',
+  doctor_fio: 'Петрова А.С.',
+  conclusion: 'fit',
+});
+assert.equal(medCard2.conclusion, 'fit');
+
+// Date ordering validations
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'МЕД-ERR1',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      exam_type: 'periodic',
+      referral_date: '2024-05-10',
+      exam_date: '2024-05-01',
+      conclusion: 'fit',
+    }),
+  /Дата медосмотра не может быть раньше даты выдачи направления/
+);
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'МЕД-ERR2',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      exam_type: 'periodic',
+      exam_date: '2024-05-01',
+      next_due_date: '2024-05-01',
+      conclusion: 'fit',
+    }),
+  /Срок следующего медосмотра должен быть позже даты пройденного медосмотра/
+);
+// Conclusion without exam date is rejected; pending without date is allowed
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'МЕД-ERR3',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      exam_type: 'periodic',
+      conclusion: 'fit',
+    }),
+  /Укажите дату прохождения медосмотра/
+);
+
+// Enum and required-field validations
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'МЕД-ERR4',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      exam_type: 'exotic' as any,
+      conclusion: 'pending',
+    }),
+  /Недопустимый вид медосмотра/
+);
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'МЕД-ERR5',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      exam_type: 'periodic',
+      exam_date: '2024-01-01',
+      conclusion: 'maybe' as any,
+    }),
+  /Недопустимое заключение/
+);
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: '',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      exam_type: 'periodic',
+      conclusion: 'pending',
+    }),
+  /Номер карты медосмотра обязателен/
+);
+
+// Referential validations: cross-LE employee, ghost refs
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'МЕД-XLE',
+      legal_entity_id: otherLe.id,
+      employee_id: testEmp.employee.id, // Кузнецов belongs to testLe
+      exam_type: 'periodic',
+      conclusion: 'pending',
+    }),
+  /Работник относится к другому юридическому лицу/
+);
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'МЕД-GHOST',
+      legal_entity_id: testLe.id,
+      employee_id: 'ghost-employee-uuid',
+      exam_type: 'periodic',
+      conclusion: 'pending',
+    }),
+  /Работник не найден/
+);
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'МЕД-GCR',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      contingent_record_id: 'ghost-contingent-uuid',
+      exam_type: 'periodic',
+      conclusion: 'pending',
+    }),
+  /Запись контингента не найдена/
+);
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'МЕД-GSOUT',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      sout_card_id: 'ghost-sout-card-uuid',
+      exam_type: 'periodic',
+      conclusion: 'pending',
+    }),
+  /Карта СОУТ не найдена/
+);
+
+// Card number uniqueness per legal entity (case-insensitive), allowed in another LE
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'мед-001',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      exam_type: 'preliminary',
+      conclusion: 'pending',
+    }),
+  /уже зарегистрирована/
+);
+const medCardOtherLe = storage.createMedicalCard({
+  card_number: 'МЕД-001',
+  legal_entity_id: otherLe.id,
+  employee_id: empOtherRes.employee.id,
+  exam_type: 'pre_shift',
+  conclusion: 'pending',
+});
+assert.equal(medCardOtherLe.legal_entity_id, otherLe.id);
+
+// Update: fill in results of the pending preliminary exam
+const medCard1Updated = storage.updateMedicalCard(medCard1.id, {
+  exam_date: '2024-03-15',
+  next_due_date: '2026-03-15',
+  conclusion: 'fit_restrictions',
+  conclusion_details: 'Ограничения по высоте выше 3 м',
+  contraindications_found: true,
+});
+assert.equal(medCard1Updated.conclusion, 'fit_restrictions');
+assert.equal(medCard1Updated.exam_date, '2024-03-15');
+assert.equal(medCard1Updated.contraindications_found, true);
+// Invalid update is rejected and data stays intact
+assert.throws(() => storage.updateMedicalCard(medCard1.id, { next_due_date: '2024-01-01' }), /Срок следующего медосмотра должен быть позже/);
+assert.equal(storage.getMedicalCardById(medCard1.id)?.next_due_date, '2026-03-15');
+assert.throws(() => storage.updateMedicalCard('ghost-med-id', { conclusion: 'fit' }), /Карта медосмотра не найдена/);
+
+// List filters: by type, conclusion, overdue flag, search
+const periodicList = storage.listMedicalCards({ legal_entity_id: testLe.id, exam_type: 'periodic' });
+assert.equal(periodicList.total, 1);
+assert.equal(periodicList.items[0].id, medCard2.id);
+const unfitList = storage.listMedicalCards({ exam_type: 'preliminary', conclusion: 'fit_restrictions' });
+assert.equal(unfitList.total, 1);
+// Overdue filter: card with expired next_due_date is listed, future/empty dates are not
+const overdueCard = storage.createMedicalCard({
+  card_number: 'МЕД-003',
+  legal_entity_id: testLe.id,
+  employee_id: testEmp.employee.id,
+  exam_type: 'periodic',
+  exam_date: '2024-01-10',
+  next_due_date: '2025-01-10',
+  conclusion: 'fit',
+});
+const overdueList = storage.listMedicalCards({ overdue: true });
+assert.ok(overdueList.items.some(c => c.id === overdueCard.id));
+assert.ok(!overdueList.items.some(c => c.id === medCard1.id || c.id === medCard2.id || c.id === medCardOtherLe.id));
+const searchByClinic = storage.listMedicalCards({ search: 'профпатологии' });
+assert.equal(searchByClinic.total, 1);
+const searchByFio = storage.listMedicalCards({ search: 'кузнецов алексей' });
+assert.ok(searchByFio.total >= 2);
+
+// Archive/restore lifecycle: archived cards hidden from active list, unique number freed
+const archivedMed = storage.archiveMedicalCard(medCardOtherLe.id);
+assert.equal(archivedMed.status, 'archived');
+assert.equal(storage.listMedicalCards({ legal_entity_id: otherLe.id }).total, 0);
+const afterArchiveNumber = storage.createMedicalCard({
+  card_number: 'МЕД-001',
+  legal_entity_id: otherLe.id,
+  employee_id: empOtherRes.employee.id,
+  exam_type: 'periodic',
+  conclusion: 'pending',
+});
+assert.ok(afterArchiveNumber.id);
+assert.throws(() => storage.archiveMedicalCard(medCardOtherLe.id), /уже в архиве/);
+const restoredMed = storage.restoreMedicalCard(medCardOtherLe.id);
+assert.equal(restoredMed.status, 'active');
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'МЕД-001',
+      legal_entity_id: otherLe.id,
+      employee_id: empOtherRes.employee.id,
+      exam_type: 'periodic',
+      conclusion: 'pending',
+    }),
+  /уже зарегистрирована/
+);
+
+// 23. Psychiatric examinations (Order 342н) within module 'medical': CRUD and date bounds
+console.log('[23/24] Тестирование психиатрических освидетельствований (Приказ 342н): создание, сроки действия заключения...');
+
+const psychExam1 = storage.createPsychiatricExam({
+  legal_entity_id: testLe.id,
+  employee_id: testEmp.employee.id,
+  exam_date: '2024-04-01',
+  commission_members: 'Психиатр Иванов И.И., нарколог Сидоров С.С.',
+  conclusion: 'fit',
+  conclusion_protocol_number: 'Протокол № 12/24',
+  valid_until: '2026-04-01',
+  basis: 'Периодическое освидетельствование, Приказ 342н',
+});
+assert.equal(psychExam1.conclusion, 'fit');
+assert.equal(psychExam1.valid_until, '2026-04-01');
+assert.ok(psychExam1.id);
+
+// valid_until must be later than exam_date
+assert.throws(
+  () =>
+    storage.createPsychiatricExam({
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      exam_date: '2024-04-01',
+      valid_until: '2024-04-01',
+      conclusion: 'fit',
+    }),
+  /Срок действия заключения должен быть позже даты освидетельствования/
+);
+// Invalid conclusion enum
+assert.throws(
+  () =>
+    storage.createPsychiatricExam({
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      conclusion: 'suspicious' as any,
+    }),
+  /Недопустимое заключение комиссии/
+);
+// Cross-legal-entity employee rejected
+assert.throws(
+  () =>
+    storage.createPsychiatricExam({
+      legal_entity_id: otherLe.id,
+      employee_id: testEmp.employee.id,
+      conclusion: 'fit',
+    }),
+  /Работник относится к другому юридическому лицу/
+);
+
+const psychList = storage.listPsychiatricExams({ legal_entity_id: testLe.id });
+assert.equal(psychList.total, 1);
+const psychSearch = storage.listPsychiatricExams({ search: 'протокол № 12' });
+assert.equal(psychSearch.total, 1);
+
+const psychUpdated = storage.updatePsychiatricExam(psychExam1.id, { conclusion: 'fit_restricted', comment: 'Допуск с ограничениями по решению комиссии' });
+assert.equal(psychUpdated.conclusion, 'fit_restricted');
+assert.throws(() => storage.updatePsychiatricExam(psychExam1.id, { valid_until: '2020-01-01' }), /Срок действия заключения должен быть позже/);
+const psychArchived = storage.archivePsychiatricExam(psychExam1.id);
+assert.equal(psychArchived.status, 'archived');
+assert.equal(storage.listPsychiatricExams({ legal_entity_id: testLe.id }).total, 0);
+assert.throws(() => storage.archivePsychiatricExam(psychExam1.id), /уже в архиве/);
+
+// 24. Medical mapping, import preview, referential integrity, module toggle, backup round-trip
+console.log('[24/24] Тестирование маппинга медосмотров, предпросмотра импорта, целостности, переключения модуля и бэкапа...');
+
+// Header mapping & aliases
+const medHeadersMap = mapMedicalHeaders([
+  'Юридическое лицо',
+  'ФИО работника',
+  'СНИЛС',
+  '№ карты медосмотра',
+  'Вид медосмотра',
+  'Направление',
+  'Дата осмотра',
+  'Срок следующего осмотра',
+  'Клиника',
+  'Врач',
+  'Заключение',
+  'Противопоказания',
+]);
+assert.equal(medHeadersMap.problems.length, 0);
+const mappedFields = Object.values(medHeadersMap.mapping);
+for (const f of ['legal_entity', 'employee_fio', 'employee_snils', 'card_number', 'exam_type', 'referral_date', 'exam_date', 'next_due_date', 'clinic_name', 'doctor_fio', 'conclusion', 'conclusion_details']) {
+  assert.ok(mappedFields.includes(f), `Поле ${f} не сопоставлено`);
+}
+const medMissing = mapMedicalHeaders(['Рядовой столбец']);
+assert.ok(medMissing.problems.some(p => p.includes('card_number')));
+assert.ok(medMissing.problems.some(p => p.includes('exam_type')));
+assert.ok(medMissing.problems.some(p => p.includes('работник')));
+assert.equal(MEDICAL_HEADERS.length, 12);
+
+// Import preview: valid row, bad exam type, unknown LE, missing dates
+const existingCards = storage.getMedicalCardsRaw();
+const medPreviewRows = [
+  ['ООО «Другое»', '', '112-233-445 95', 'МЕД-IMP-1', 'Предварительный', '', '', '', '', '', '', ''],
+  [testLe.short_name || '', 'Кузнецов Алексей Сергеевич', '', 'МЕД-IMP-2', 'Экзотический', '', '', '', '', '', '', ''],
+  ['ООО «Нет такой организации»', 'Иванов И.И.', '', 'МЕД-IMP-3', 'Периодический', '', '', '', '', '', '', ''],
+  [testLe.short_name || '', 'Кузнецов А.С.', '', 'МЕД-IMP-4', 'Периодический', '01.02.2024', '01.03.2024', '01.03.2026', 'Клиника', 'Врач В.В.', 'Годен', ''],
+];
+const medMapping: Record<number, string> = {};
+MEDICAL_HEADERS.forEach((h, idx) => {
+  medMapping[idx] = mapMedicalHeaders([h]).mapping[0];
+});
+const medPreview = generateMedicalPreview(medPreviewRows, medMapping, existingCards, 'add');
+assert.equal(medPreview.results.length, 4);
+assert.equal(medPreview.results[0].action, 'add');
+assert.equal(medPreview.results[0].data.exam_type, 'preliminary');
+assert.equal(medPreview.results[1].action, 'reject');
+assert.ok(medPreview.results[1].errors.some(e => e.includes('Недопустимый вид медосмотра')));
+assert.equal(medPreview.results[2].action, 'reject');
+assert.ok(medPreview.results[2].errors.some(e => e.includes('не найдено в базе')));
+assert.equal(medPreview.results[3].action, 'add');
+assert.equal(medPreview.results[3].data.exam_date, '2024-03-01');
+assert.equal(medPreview.results[3].data.next_due_date, '2026-03-01');
+assert.equal(medPreview.results[3].data.conclusion, 'fit');
+assert.ok(medPreview.summary.add >= 2);
+
+// Duplicate detection in add mode: existing card number МЕД-002 -> update action in update mode
+const medPreviewDup = generateMedicalPreview([['ООО «САОТ-Тест»', 'Кузнецов А.С.', '', 'МЕД-002', 'Периодический', '', '01.04.2024', '', '', '', 'Годен', '']], medMapping, existingCards, 'update');
+assert.equal(medPreviewDup.results[0].action, 'update');
+
+// Referential integrity: corrupt card sout_card_id link
+const rawMedCards = storage.getMedicalCardsRaw();
+const savedSoutLink = rawMedCards.find(c => c.sout_card_id)!.sout_card_id;
+rawMedCards.find(c => c.sout_card_id)!.sout_card_id = 'ghost-sout-link';
+storage.saveMedicalCardsRaw(rawMedCards);
+const brokenMed = storage.verifyDataIntegrity();
+assert.equal(brokenMed.valid, false);
+assert.ok(brokenMed.errors.some(e => e.includes('Карта медосмотра') && e.includes('несуществующую карту СОУТ')));
+const fixTarget = storage.getMedicalCardsRaw().find(c => c.sout_card_id === 'ghost-sout-link')!;
+fixTarget.sout_card_id = savedSoutLink || null;
+storage.saveMedicalCardsRaw(storage.getMedicalCardsRaw());
+assert.equal(storage.verifyDataIntegrity().valid, true);
+
+// Referential integrity: wrong LE-employee pairing passes undetected only if consistent — check via create instead
+// Module toggle: disable medical blocks CRUD, data preserved
+setModuleState('medical', false);
+assert.equal(storage.isModuleEnabled('medical'), false);
+assert.throws(
+  () =>
+    storage.createMedicalCard({
+      card_number: 'BLOCKED-MED',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+      exam_type: 'periodic',
+      conclusion: 'pending',
+    }),
+  /Модуль «Медосмотры» отключён/
+);
+assert.throws(() => storage.createPsychiatricExam({ legal_entity_id: testLe.id, employee_id: testEmp.employee.id, conclusion: 'fit' }), /Модуль «Медосмотры» отключён/);
+assert.ok(storage.getMedicalCardsRaw().length >= 3); // данные сохранены при отключении
+setModuleState('medical', true);
+assert.equal(storage.isModuleEnabled('medical'), true);
+
+// Backup manifest includes medical counts and body; restore round-trip preserves medical data
+const backupStage8 = JSON.parse(storage.createBackup('test-stage8'));
+assert.ok(backupStage8.counts.medical_cards >= 3);
+assert.ok(backupStage8.counts.psychiatric_exams >= 1);
+assert.ok(Array.isArray(backupStage8.data.medical_cards) && backupStage8.data.medical_cards.length >= 3);
+assert.ok(Array.isArray(backupStage8.data.psychiatric_exams) && backupStage8.data.psychiatric_exams.length >= 1);
+
+// Add temporary card, then restore -> temporary card gone, real cards remain, integrity valid
+storage.createMedicalCard({
+  card_number: 'МЕД-TEMP',
+  legal_entity_id: testLe.id,
+  employee_id: testEmp.employee.id,
+  exam_type: 'periodic',
+  conclusion: 'pending',
+});
+assert.ok(storage.getMedicalCardsRaw().some(c => c.card_number === 'МЕД-TEMP'));
+const restoreReport8 = storage.restoreFromBackup(JSON.stringify(backupStage8));
+assert.equal(restoreReport8.valid, true);
+assert.equal(storage.getMedicalCardsRaw().some(c => c.card_number === 'МЕД-TEMP'), false);
+assert.ok(storage.getMedicalCardsRaw().some(c => c.card_number === 'МЕД-001'));
+assert.ok(storage.getMedicalCardsRaw().some(c => c.card_number === 'МЕД-002'));
+assert.equal(storage.verifyDataIntegrity().valid, true);
+assert.equal(storage.isModuleEnabled('medical'), true);
+
+console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–8 УСПЕШНО ПРОЙДЕНЫ (24/24)!');
+
 

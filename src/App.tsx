@@ -22,6 +22,10 @@ import { OprList } from './components/OprList';
 import { OprForm } from './components/OprForm';
 import { OprCardView } from './components/OprCardView';
 import { OprImport } from './components/OprImport';
+import { MedicalList } from './components/MedicalList';
+import { MedicalForm } from './components/MedicalForm';
+import { MedicalCardView } from './components/MedicalCardView';
+import { MedicalImport } from './components/MedicalImport';
 import { DictionariesView } from './components/DictionariesView';
 import { AuditLogView } from './components/AuditLogView';
 import { BackupView } from './components/BackupView';
@@ -78,6 +82,14 @@ export const App: React.FC = () => {
         setCurrentView('opr');
       } else if (hash === 'opr-new' || hash === 'opr-edit' || hash === 'opr-import') {
         setCurrentView(hash);
+      } else if (hash.startsWith('medical/')) {
+        const id = hash.replace('medical/', '');
+        setCurrentView('medical-view');
+        setTargetId(id);
+      } else if (hash === 'medical') {
+        setCurrentView('medical');
+      } else if (hash === 'medical-new' || hash === 'medical-edit' || hash === 'medical-import') {
+        setCurrentView(hash);
       } else if (hash === 'dictionaries') {
         setCurrentView('dictionaries');
       } else if (hash === 'modules') {
@@ -105,6 +117,8 @@ export const App: React.FC = () => {
       window.location.hash = `sout/${id}`;
     } else if (view === 'opr-view' && id) {
       window.location.hash = `opr/${id}`;
+    } else if (view === 'medical-view' && id) {
+      window.location.hash = `medical/${id}`;
     } else if (view === 'home') {
       window.location.hash = '';
     } else {
@@ -126,6 +140,7 @@ export const App: React.FC = () => {
         onClearCurrentLe={handleClearCurrentLe}
         soutEnabled={storage.isModuleEnabled('sout')}
         oprEnabled={storage.isModuleEnabled('opr')}
+        medicalEnabled={storage.isModuleEnabled('medical')}
       />
 
       <main>
@@ -250,6 +265,23 @@ export const App: React.FC = () => {
         )}
 
         {currentView === 'opr-import' && <OprImport onNavigate={handleNavigate} />}
+
+        {/* Медосмотры (Этап 8) */}
+        {currentView === 'medical' && (
+          <MedicalList onNavigate={handleNavigate} filterLeId={targetId} />
+        )}
+
+        {currentView === 'medical-new' && <MedicalForm onNavigate={handleNavigate} />}
+
+        {currentView === 'medical-edit' && (
+          <MedicalForm id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'medical-view' && targetId && (
+          <MedicalCardView id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'medical-import' && <MedicalImport onNavigate={handleNavigate} />}
 
         {/* Dictionaries */}
         {currentView === 'dictionaries' && <DictionariesView />}
