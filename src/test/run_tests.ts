@@ -410,6 +410,244 @@ assert.ok(storage.getBackupsList().some(b => b.label === 'auto-import-employees'
 storage.checkPeriodicAutoBackup();
 assert.ok(storage.getBackupsList().some(b => b.label === 'auto-daily'));
 
-console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2, 3, 4 И 5 УСПЕШНО ПРОЙДЕНЫ (16/16)!');
+// 17. SOUT cards: classes, harmful factors, automatic guarantees (TK RF), expiry (426-FZ)
+console.log('[17/19] Тестирование карт СОУТ: классы, факторы, авторасчёт гарантий и сроков (426-ФЗ)...');
+import { mapSoutHeaders, parseSoutFactors } from '../services/excel';
+
+// Static guarantee/expiry calculations via the storage instance constructor
+const StorageService: any = (storage as any).constructor;
+
+// Disabled module blocks creation before validation (module lifecycle check first)
+assert.equal(storage.isModuleEnabled('sout'), false);
+assert.throws(
+  () => storage.createSoutCard({ card_number: 'OFF-0', legal_entity_id: testLe.id, department_id: testDept.id, position_id: testPos.id, final_class: '2' }),
+  /Модуль СОУТ отключён/
+);
+// Enable the module for further tests
+storage.toggleModule('sout');
+assert.equal(storage.isModuleEnabled('sout'), true);
+
+// Invalid class rejected
+assert.throws(
+  () => storage.createSoutCard({ card_number: 'X-0', legal_entity_id: testLe.id, department_id: testDept.id, position_id: testPos.id, final_class: '3.5' }),
+  /Недопустимый класс условий труда/
+);
+// Missing card number rejected
+assert.throws(
+  () => storage.createSoutCard({ card_number: ' ', legal_entity_id: testLe.id, department_id: testDept.id, position_id: testPos.id, final_class: '2' }),
+  /Номер карты СОУТ обязателен/
+);
+// Department of another legal entity rejected (isolation)
+const otherLe = storage.createLegalEntity({ full_name: 'ООО «Другое»', inn: '7702000002' });
+assert.throws(
+  () => storage.createSoutCard({ card_number: 'X-ERR', legal_entity_id: otherLe.id, department_id: testDept.id, position_id: testPos.id, final_class: '2' }),
+  /Подразделение не принадлежит выбранному юридическому лицу/
+);
+
+// Class 3.3 — ст. 92 (36 ч), ст. 117 (7 дней), ст. 147 (4%), молоко, досрочная пенсия, СИЗ
+const card33 = storage.createSoutCard({
+  card_number: 'СОУТ-001',
+  legal_entity_id: testLe.id,
+  department_id: testDept.id,
+  position_id: testPos.id,
+  workplace_label: 'Кабинет №2',
+  factors: [
+    { type: 'noise', class: '3.3', note: '85 дБА' },
+    { type: 'chemical', class: '3.2' },
+  ],
+  final_class: '3.3',
+  employees_count: 5,
+  women_count: 2,
+  minors_count: 0,
+  disabled_count: 1,
+  report_approved_at: '2024-05-20',
+});
+assert.equal(card33.guarantees.reduced_hours, true); // ст. 92 ТК РФ
+assert.equal(card33.guarantees.extra_vacation_days, 7); // ст. 117 ТК РФ
+assert.equal(card33.guarantees.pay_increase_percent, 4); // ст. 147 ТК РФ
+assert.equal(card33.guarantees.milk_issue, true); // ст. 222 ТК РФ
+assert.equal(card33.guarantees.early_pension, true);
+assert.equal(card33.guarantees.ppe_issue, true);
+assert.equal(card33.expires_at, '2029-05-20'); // 5 лет со дня утверждения отчёта (ст. 8 426-ФЗ)
+assert.equal(card33.declaration_active, false);
+
+// Class 2 — no guarantees
+const card2 = storage.createSoutCard({
+  card_number: 'СОУТ-002',
+  legal_entity_id: testLe.id,
+  department_id: testDept.id,
+  position_id: testPos.id,
+  final_class: '2',
+  report_approved_at: '2024-01-15',
+});
+assert.equal(card2.guarantees.reduced_hours, false);
+assert.equal(card2.guarantees.extra_vacation_days, 0);
+assert.equal(card2.guarantees.pay_increase_percent, 0);
+assert.equal(card2.guarantees.milk_issue, false);
+assert.equal(card2.expires_at, '2029-01-15');
+
+// Class 3.1 — only pay increase from 4%, milk/PPE, no reduced hours/vacation
+const g31 = StorageService.computeGuarantees('3.1');
+assert.equal(g31.reduced_hours, false);
+assert.equal(g31.extra_vacation_days, 0);
+assert.equal(g31.pay_increase_percent, 4);
+assert.equal(g31.milk_issue, true);
+// Class 4 — hazardous: all guarantees
+const g4 = StorageService.computeGuarantees('4');
+assert.equal(g4.reduced_hours, true);
+assert.equal(g4.extra_vacation_days, 7);
+assert.equal(g4.pay_increase_percent, 4);
+assert.equal(g4.early_pension, true);
+
+// Declaration (ст. 11 426-ФЗ) — perpetual card (expires_at = null)
+const cardDecl = storage.createSoutCard({
+  card_number: 'СОУТ-003',
+  legal_entity_id: testLe.id,
+  department_id: testDept.id,
+  position_id: testPos.id,
+  final_class: '2',
+  report_approved_at: '2023-09-01',
+  declaration_active: true,
+  declaration_number: 'Д-77-2023-0456',
+});
+assert.equal(cardDecl.expires_at, null); // бессрочная карта по декларации
+assert.equal(cardDecl.declaration_number, 'Д-77-2023-0456');
+
+// Duplicate card number in same LE -> error; in another LE -> allowed (isolation)
+assert.throws(
+  () => storage.createSoutCard({ card_number: 'соут-001', legal_entity_id: testLe.id, department_id: testDept.id, position_id: testPos.id, final_class: '2' }),
+  /уже зарегистрирована/
+);
+
+// Archive & restore without cascade damage to related data
+const archived = storage.archiveSoutCard(card2.id);
+assert.equal(archived.status, 'archived');
+assert.throws(() => storage.archiveSoutCard(card2.id), /уже в архиве/);
+const restored = storage.restoreSoutCard(card2.id);
+assert.equal(restored.status, 'active');
+assert.equal(storage.verifyDataIntegrity().valid, true); // связанные данные не повреждены
+
+// SOUT header aliases mapping and factor parsing (IMPORT_EXPORT)
+const { mapping: soutMap, problems: soutProb } = mapSoutHeaders([
+  'Организация',
+  'Отдел',
+  'Профессия',
+  '№ карты СОУТ',
+  'Рабочее место',
+  'Вредные факторы',
+  'Класс СОУТ',
+]);
+assert.equal(soutMap[0], 'legal_entity');
+assert.equal(soutMap[3], 'card_number');
+assert.equal(soutMap[6], 'final_class');
+assert.equal(soutProb.length, 0);
+
+const parsedFactors = parseSoutFactors('Шум:3.3; Химический фактор:3.2; Освещённость:2');
+assert.equal(parsedFactors.errors.length, 0);
+assert.equal(parsedFactors.factors.length, 3);
+assert.equal(parsedFactors.factors[0].type, 'noise');
+assert.equal(parsedFactors.factors[0].class, '3.3');
+assert.equal(parsedFactors.factors[2].type, 'illumination');
+const badFactors = parseSoutFactors('Шум:9.9');
+assert.ok(badFactors.errors.length > 0);
+
+// 18. Worker familiarization under signature (ст. 5 426-ФЗ) + audit log
+console.log('[18/19] Тестирование ознакомления работников под роспись (ст. 5 426-ФЗ)...');
+const fam = storage.familiarizeSoutCard(card33.id, testEmp.employee.id, '2024-06-01', 'Электронно через САОТ');
+assert.equal(fam.sout_card_id, card33.id);
+assert.equal(fam.employee_id, testEmp.employee.id);
+assert.equal(fam.signed_at, '2024-06-01');
+
+// Double signature rejected
+assert.throws(
+  () => storage.familiarizeSoutCard(card33.id, testEmp.employee.id),
+  /уже ознакомлен/
+);
+// Future date rejected
+assert.throws(
+  () => storage.familiarizeSoutCard(cardDecl.id, testEmp.employee.id, '2099-01-01'),
+  /не может быть в будущем/
+);
+// Employee from another LE rejected (organizational isolation)
+const otherDept = storage.createDepartment({ legal_entity_id: otherLe.id, name: 'Цех других' });
+const empOtherRes = storage.createEmployee({
+  legal_entity_id: otherLe.id,
+  department_id: otherDept.id,
+  position_id: testPos.id,
+  last_name: 'Другов',
+  first_name: 'Андрей',
+  hire_date: '2024-02-01',
+});
+assert.throws(
+  () => storage.familiarizeSoutCard(card33.id, empOtherRes.employee.id),
+  /другому юридическому лицу/
+);
+
+// Familiarization list and audit log registration (sout_familiarize)
+const famList = storage.listSoutFamiliarizations(card33.id);
+assert.equal(famList.length, 1);
+const auditLog = storage.getAuditLogs();
+assert.ok(auditLog.some((a: any) => a.action === 'sout_familiarize' && String(a.comment || '').includes('картой СОУТ')));
+
+// Remove mark and confirm cleanup
+storage.removeSoutFamiliarization(fam.id);
+assert.equal(storage.listSoutFamiliarizations(card33.id).length, 0);
+
+// 19. SOUT referential integrity, module toggle, backup integration
+console.log('[19/19] Тестирование целостности СОУТ, переключения модуля и бэкапа...');
+// Corrupt card link: nonexistent department
+const rawCards = storage.getSoutCardsRaw();
+const savedDept = rawCards[0].department_id;
+rawCards[0].department_id = 'non-existent-dept-uuid';
+storage.saveSoutCardsRaw(rawCards);
+const brokenSout = storage.verifyDataIntegrity();
+assert.equal(brokenSout.valid, false);
+assert.ok(brokenSout.errors.some(e => e.includes('Карта СОУТ') && e.includes('несуществующее подразделение')));
+rawCards[0].department_id = savedDept;
+storage.saveSoutCardsRaw(rawCards);
+assert.equal(storage.verifyDataIntegrity().valid, true);
+
+// Corrupt familiarization link: nonexistent card
+const rawFam = storage.getSoutFamiliarizationsRaw();
+storage.familiarizeSoutCard(card33.id, testEmp.employee.id); // re-create one record
+const famAgain = storage.getSoutFamiliarizationsRaw();
+const savedCardId = famAgain[famAgain.length - 1].sout_card_id;
+famAgain[famAgain.length - 1].sout_card_id = 'ghost-card-uuid';
+storage.saveSoutFamiliarizationsRaw(famAgain);
+const brokenFam = storage.verifyDataIntegrity();
+assert.equal(brokenFam.valid, false);
+assert.ok(brokenFam.errors.some(e => e.includes('ознакомления') && e.includes('несуществующую карту')));
+famAgain[famAgain.length - 1].sout_card_id = savedCardId;
+storage.saveSoutFamiliarizationsRaw(famAgain);
+assert.equal(storage.verifyDataIntegrity().valid, true);
+
+// Module toggle: disable hides menu/routes and blocks CRUD, data preserved
+storage.toggleModule('sout');
+assert.equal(storage.isModuleEnabled('sout'), false);
+assert.throws(() => storage.createSoutCard({ card_number: 'OFF-1', legal_entity_id: testLe.id, department_id: testDept.id, position_id: testPos.id, final_class: '2' }), /Модуль СОУТ отключён/);
+assert.throws(() => storage.familiarizeSoutCard(card33.id, testEmp.employee.id), /Модуль СОУТ отключён/);
+assert.equal(storage.getSoutCardsRaw().length >= 4, true); // данные сохранены при отключении
+storage.toggleModule('sout');
+assert.equal(storage.isModuleEnabled('sout'), true);
+
+// Backup manifest includes sout counts and body; restore round-trip preserves SOUT
+const backup2 = JSON.parse(storage.createBackup('test-stage6'));
+assert.ok(backup2.counts.sout_cards >= 4);
+assert.ok(backup2.counts.sout_familiarizations >= 1);
+assert.ok(Array.isArray(backup2.data.sout_cards) && backup2.data.sout_cards.length >= 4);
+assert.ok(Array.isArray(backup2.data.sout_familiarizations));
+
+// Add a card after backup, then restore -> card disappears, integrity valid
+storage.createSoutCard({ card_number: 'СОУТ-POST', legal_entity_id: testLe.id, department_id: testDept.id, position_id: testPos.id, final_class: '1' });
+const restoreReport = storage.restoreFromBackup(JSON.stringify(backup2));
+assert.equal(restoreReport.valid, true);
+assert.equal(storage.getSoutCardsRaw().some(c => c.card_number === 'СОУТ-POST'), false);
+assert.ok(storage.getSoutCardsRaw().some(c => c.card_number === 'СОУТ-001'));
+assert.equal(storage.verifyDataIntegrity().valid, true);
+
+// Module remains enabled after restore (module registry is not part of backup payload)
+assert.equal(storage.isModuleEnabled('sout'), true);
+
+console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–6 УСПЕШНО ПРОЙДЕНЫ (19/19)!');
 
 

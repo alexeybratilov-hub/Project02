@@ -201,6 +201,23 @@ export const App: React.FC = () => {
           <EmployeesImport onNavigate={handleNavigate} />
         )}
 
+        {/* SOUT (Stage 6) */}
+        {currentView === 'sout' && (
+          <SoutList onNavigate={handleNavigate} filterLeId={targetId} />
+        )}
+
+        {currentView === 'sout-new' && <SoutForm onNavigate={handleNavigate} />}
+
+        {currentView === 'sout-edit' && (
+          <SoutForm id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'sout-view' && targetId && (
+          <SoutCardView id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'sout-import' && <SoutImport onNavigate={handleNavigate} />}
+
         {/* Dictionaries */}
         {currentView === 'dictionaries' && <DictionariesView />}
 
