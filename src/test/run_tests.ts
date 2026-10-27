@@ -915,6 +915,38 @@ assert.equal(storage.isModuleEnabled('opr'), true);
 console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–7 УСПЕШНО ПРОЙДЕНЫ (21/21)!');
 
 // 22. Medical examinations (Stage 8): card CRUD, date validations, links to LE/employee/contingent/SOUT
+
+// [TEMP-DIAG] begin
+const _diagCounters: Record<string, number> = {};
+const _diagTimes: Record<string, number> = {};
+{
+  const st: any = storage;
+  for (const name of ['getAuditLogs','saveAuditLogsRaw','addAudit','createMedicalCard','updateMedicalCard','validateMedicalRefs','getEmployeesRaw','getLegalEntitiesRaw','getContingentRecordById','getEmployeeById','getSoutCardById','getDepartmentById','createBackup','verifyDataIntegrity','listMedicalCards']) {
+    if (typeof st[name] === 'function') {
+      const orig = st[name].bind(st);
+      _diagCounters[name] = 0; _diagTimes[name] = 0;
+      st[name] = (...args: any[]) => {
+        _diagCounters[name]++;
+        const t0 = process.hrtime.bigint();
+        const r = orig(...args);
+        _diagTimes[name] += Number(process.hrtime.bigint() - t0) / 1e6;
+        return r;
+      };
+    }
+  }
+}
+let _diagLastMark = Date.now();
+const _diagLog = (mark: string) => {
+  const now = Date.now();
+  console.error(`[DIAG] ${mark} +${now - _diagLastMark}ms counters=${JSON.stringify(_diagCounters)}`);
+  _diagLastMark = now;
+};
+process.on('exit', () => { try { console.error('[DIAG-EXIT] ' + JSON.stringify({counters:_diagCounters, ms:_diagTimes})); } catch {} });
+const _origCreateMedicalCard = storage.createMedicalCard.bind(storage);
+_diagLog('BEFORE_BLOCK22');
+storage.createMedicalCard = ((data: any) => { _diagLog('createMedicalCard:' + (data?.card_number ?? '?')); return _origCreateMedicalCard(data); }) as any;
+// [TEMP-DIAG] end
+
 console.log('[22/24] Тестирование карт медосмотров (Приказ 29н): CRUD, валидация дат и сроков, связи с СОУТ и контингентом...');
 
 import { mapMedicalHeaders, generateMedicalPreview, MEDICAL_HEADERS } from '../services/excel';
@@ -1131,6 +1163,7 @@ assert.equal(storage.getMedicalCardById(medCard1.id)?.next_due_date, '2026-03-15
 assert.throws(() => storage.updateMedicalCard('ghost-med-id', { conclusion: 'fit' }), /Карта медосмотра не найдена/);
 
 // List filters: by type, conclusion, overdue flag, search
+_diagLog('M1-before-periodicList');
 const periodicList = storage.listMedicalCards({ legal_entity_id: testLe.id, exam_type: 'periodic' });
 assert.equal(periodicList.total, 1);
 assert.equal(periodicList.items[0].id, medCard2.id);
@@ -1146,18 +1179,23 @@ const overdueCard = storage.createMedicalCard({
   next_due_date: '2025-01-10',
   conclusion: 'fit',
 });
+_diagLog('M2-before-overdueList');
 const overdueList = storage.listMedicalCards({ overdue: true });
 assert.ok(overdueList.items.some(c => c.id === overdueCard.id));
 assert.ok(!overdueList.items.some(c => c.id === medCard1.id || c.id === medCard2.id || c.id === medCardOtherLe.id));
+_diagLog('M3-before-searchByClinic');
 const searchByClinic = storage.listMedicalCards({ search: 'профпатологии' });
 assert.equal(searchByClinic.total, 1);
+_diagLog('M4-before-searchByFio');
 const searchByFio = storage.listMedicalCards({ search: 'кузнецов алексей' });
 assert.ok(searchByFio.total >= 2);
 
 // Archive/restore lifecycle: archived cards hidden from active list, unique number freed
+_diagLog('M5-before-archive');
 const archivedMed = storage.archiveMedicalCard(medCardOtherLe.id);
 assert.equal(archivedMed.status, 'archived');
 assert.equal(storage.listMedicalCards({ legal_entity_id: otherLe.id }).total, 0);
+_diagLog('M6-before-afterArchiveNumber');
 const afterArchiveNumber = storage.createMedicalCard({
   card_number: 'МЕД-001',
   legal_entity_id: otherLe.id,
@@ -1167,6 +1205,7 @@ const afterArchiveNumber = storage.createMedicalCard({
 });
 assert.ok(afterArchiveNumber.id);
 assert.throws(() => storage.archiveMedicalCard(medCardOtherLe.id), /уже в архиве/);
+_diagLog('M7-before-restore');
 const restoredMed = storage.restoreMedicalCard(medCardOtherLe.id);
 assert.equal(restoredMed.status, 'active');
 assert.throws(
@@ -1181,6 +1220,8 @@ assert.throws(
   /уже зарегистрирована/
 );
 
+_diagLog('M8-end-block22');
+// 23. Psychiatric examinations
 // 23. Psychiatric examinations (Order 342н) within module 'medical': CRUD and date bounds
 console.log('[23/24] Тестирование психиатрических освидетельствований (Приказ 342н): создание, сроки действия заключения...');
 
