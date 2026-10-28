@@ -28,7 +28,7 @@ import {
   CONTINGENT_HEADERS,
 } from '../services/excel';
 
-console.log('--- ЗАПУСК АВТОМАТИЧЕСКИХ ТЕСТОВ САОТ (ЭТАПЫ 2, 3, 4 И 5) ---');
+console.log('--- ЗАПУСК АВТОМАТИЧЕСКИХ ТЕСТОВ САОТ (ЭТАПЫ 2–5 И ПОДЭТАПЫ 6.1–6.4) ---');
 
 // 1. Validation tests
 console.log('[1/7] Тестирование валидации реквизитов (ИНН/КПП/ОГРН)...');
@@ -666,9 +666,9 @@ assert.equal(storage.verifyDataIntegrity().valid, true);
 // Module remains enabled after restore (module registry is not part of backup payload)
 assert.equal(storage.isModuleEnabled('sout'), true);
 
-console.log('✅ ТЕСТЫ ЭТАПОВ 2–6 ПРОЙДЕНЫ (19/19)');
+console.log('✅ ТЕСТЫ ЭТАПОВ 2–5 И ПОДЭТАПА 6.1 (СОУТ) ПРОЙДЕНЫ (19/19)');
 
-// 20. OPR (Stage 7): 5x5 Matrix calculations, bounds, hazards catalog, card CRUD, measures plan, and legal entity isolation
+// 20. OPR (Подэтап 6.2): 5x5 Matrix calculations, bounds, hazards catalog, card CRUD, measures plan, and legal entity isolation
 console.log('[20/21] Тестирование модуля ОПР: матрица 5х5, уровни риска, каталог опасностей 776н и план мероприятий...');
 
 import { DEFAULT_OPR_HAZARDS } from '../services/storage';
@@ -912,9 +912,9 @@ assert.ok(storage.getOprCardsRaw().some(c => c.card_number === 'ОПР-001'));
 assert.equal(storage.verifyDataIntegrity().valid, true);
 assert.equal(storage.isModuleEnabled('opr'), true);
 
-console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–7 УСПЕШНО ПРОЙДЕНЫ (21/21)!');
+console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–5 И ПОДЭТАПОВ 6.1–6.2 (ОПР) УСПЕШНО ПРОЙДЕНЫ (21/21)!');
 
-// 22. Medical examinations (Stage 8): card CRUD, date validations, links to LE/employee/contingent/SOUT
+// 22. Medical examinations (Подэтап 6.3): card CRUD, date validations, links to LE/employee/contingent/SOUT
 console.log('[22/24] Тестирование карт медосмотров (Приказ 29н): CRUD, валидация дат и сроков, связи с СОУТ и контингентом...');
 
 import { mapMedicalHeaders, generateMedicalPreview, MEDICAL_HEADERS } from '../services/excel';
@@ -1958,7 +1958,7 @@ assert.ok(storage.getPpeIssuancesRaw().some(i => i.id === issuance1.id));
 assert.equal(storage.verifyDataIntegrity().valid, true);
 assert.equal(storage.isModuleEnabled('ppe'), true);
 
-console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–9 УСПЕШНО ПРОЙДЕНЫ (27/27)!');
+console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–5 И ПОДЭТАПОВ 6.1–6.4 УСПЕШНО ПРОЙДЕНЫ (27/27)!');
 
 
 
