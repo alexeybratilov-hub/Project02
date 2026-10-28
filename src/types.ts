@@ -472,6 +472,9 @@ export interface BackupManifest {
     ppe_norms?: number;
     ppe_cards?: number;
     ppe_issuances?: number;
+    training_programs?: number;
+    training_assignments?: number;
+    training_protocols?: number;
     audit_logs: number;
   };
   data: {
@@ -490,6 +493,9 @@ export interface BackupManifest {
     ppe_norms?: PpeNormItem[];
     ppe_cards?: PpeCard[];
     ppe_issuances?: PpeIssuanceRecord[];
+    training_programs?: TrainingProgram[];
+    training_assignments?: TrainingAssignment[];
+    training_protocols?: TrainingProtocolItem[];
     audit_logs: AuditLogItem[];
   };
 }
@@ -515,6 +521,9 @@ export interface DataIntegrityReport {
     ppe_norms?: number;
     ppe_cards?: number;
     ppe_issuances?: number;
+    training_programs?: number;
+    training_assignments?: number;
+    training_protocols?: number;
     audit_logs: number;
   };
 }
@@ -717,6 +726,154 @@ export interface PpeImportRowResult {
 
 export interface PpeImportPreviewData {
   results: PpeImportRowResult[];
+  structure_errors: string[];
+  summary: {
+    total: number;
+    add: number;
+    update: number;
+    skip: number;
+    reject: number;
+  };
+}
+
+// ==================== ЭТАП 10: ОБУЧЕНИЕ ПО ОХРАНЕ ТРУДА И ПРОВЕРКА ЗНАНИЙ (ПОСТАНОВЛЕНИЕ РФ № 2464) ====================
+
+export type TrainingProgramCategory =
+  | 'program_a' // Общие вопросы охраны труда и функционирования СУОТ
+  | 'program_b' // Безопасные методы и приемы работ при воздействии ВОРПФ
+  | 'program_c' // Работы повышенной опасности
+  | 'first_aid' // Оказание первой помощи пострадавшим
+  | 'ppe_use' // Обучение применению (использованию) СИЗ
+  | 'intro_briefing' // Вводный инструктаж
+  | 'primary_briefing' // Первичный инструктаж на рабочем месте
+  | 'repeated_briefing' // Повторный инструктаж
+  | 'unexpected_briefing' // Внеплановый инструктаж
+  | 'targeted_briefing'; // Целевой инструктаж
+
+export const TRAINING_PROGRAM_CATEGORY_LABELS_RU: Record<TrainingProgramCategory, string> = {
+  program_a: 'Программа А — общие вопросы охраны труда и функционирования СУОТ',
+  program_b: 'Программа Б — безопасные методы и приемы работ при воздействии вредных и (или) опасных производственных факторов',
+  program_c: 'Программа В — безопасные методы и приемы выполнения работ повышенной опасности',
+  first_aid: 'Обучение оказанию первой помощи пострадавшим',
+  ppe_use: 'Обучение по использованию (применению) средств индивидуальной защиты',
+  intro_briefing: 'Вводный инструктаж',
+  primary_briefing: 'Первичный инструктаж на рабочем месте',
+  repeated_briefing: 'Повторный инструктаж',
+  unexpected_briefing: 'Внеплановый инструктаж',
+  targeted_briefing: 'Целевой инструктаж',
+};
+
+// Периодичность проверки знаний / повторного обучения по Постановлению № 2464 (в месяцах; null — без периодичности)
+export const TRAINING_DEFAULT_RECURRING_MONTHS: Record<TrainingProgramCategory, number | null> = {
+  program_a: 36,
+  program_b: 36,
+  program_c: 12,
+  first_aid: 36,
+  ppe_use: 36,
+  intro_briefing: null,
+  primary_briefing: 33, // не реже 1 раза в 6 месяцев (для работ повышенной опасности — 3 мес.)
+  repeated_briefing: 33,
+  unexpected_briefing: null,
+  targeted_briefing: null,
+};
+
+export interface TrainingProgram {
+  id: string;
+  legal_entity_id: string;
+  name: string;
+  category: TrainingProgramCategory;
+  hours: number; // трудоемкость программы (часы): А/Б — не менее 16, первая помощь — не менее 8
+  recurring_months?: number | null; // периодичность обучения/проверки знаний; null — без периодичности
+  positions?: string | null; // перечень должностей/профессий (текст)
+  basis?: string | null; // основание разработки (ЕТН, ЛНА, Постановление 2464)
+  status: EntityStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TrainingBriefingType = 'intro' | 'primary' | 'repeated' | 'unexpected' | 'targeted';
+
+export const TRAINING_BRIEFING_TYPE_LABELS_RU: Record<TrainingBriefingType, string> = {
+  intro: 'Вводный',
+  primary: 'Первичный на рабочем месте',
+  repeated: 'Повторный',
+  unexpected: 'Внеплановый',
+  targeted: 'Целевой',
+};
+
+export interface TrainingAssignment {
+  id: string;
+  legal_entity_id: string;
+  employee_id: string;
+  training_program_id: string;
+  briefing_type?: TrainingBriefingType | null; // для инструктажей
+  assignment_date: string; // YYYY-MM-DD — дата назначения/проведения
+  planned_due_date?: string | null; // плановая дата прохождения
+  completed_protocol_id?: string | null; // протокол, фиксирующий прохождение
+  notes?: string | null;
+  status: EntityStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TrainingKnowledgeResult = 'passed' | 'failed';
+
+export const TRAINING_RESULT_LABELS_RU: Record<TrainingKnowledgeResult, string> = {
+  passed: 'Удовлетворительно',
+  failed: 'Неудовлетворительно',
+};
+
+export interface TrainingProtocolMember {
+  position: string; // должность с указанием наименования организации
+  last_name: string;
+  first_name?: string | null;
+  middle_name?: string | null;
+  trained_in_commission_program?: boolean; // обучение по программе А в составе комиссии (п. 27 Порядка 2464)
+}
+
+export interface TrainingProtocolItem {
+  id: string;
+  protocol_number: string; // номер протокола заседания комиссии
+  legal_entity_id: string;
+  training_program_id: string;
+  session_date: string; // YYYY-MM-DD — дата заседания комиссии
+  chairperson: TrainingProtocolMember;
+  members: TrainingProtocolMember[];
+  employee_id: string;
+  result: TrainingKnowledgeResult;
+  issues_certificate: boolean; // выдача удостоверения (/выписки)
+  certificate_number?: string | null; // номер удостоверения (форма Приложения № 2)
+  registry_entry_number?: string | null; // регистрационный номер записи в реестре Минтруда (ЕИСОТ)
+  next_check_date?: string | null; // YYYY-MM-DD — срок следующей проверки знаний
+  invalidation_reason?: string | null; // причина аннулирования (п. 35 Порядка 2464)
+  notes?: string | null;
+  status: EntityStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TrainingValidityStatus = 'valid' | 'expiring' | 'overdue' | 'none';
+
+export const TRAINING_VALIDITY_STATUS_LABELS_RU: Record<TrainingValidityStatus, string> = {
+  valid: 'Действует',
+  expiring: 'Истекает',
+  overdue: 'Просрочено',
+  none: 'Нет данных',
+};
+
+export interface TrainingImportRowResult {
+  row: number;
+  action: 'add' | 'update' | 'skip' | 'reject';
+  title: string;
+  errors: string[];
+  warnings: string[];
+  changes: string[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: Record<string, any>;
+}
+
+export interface TrainingImportPreviewData {
+  results: TrainingImportRowResult[];
   structure_errors: string[];
   summary: {
     total: number;

@@ -38,6 +38,12 @@ import {
   PPE_CATEGORY_LABELS_RU,
   PpeImportRowResult,
   PpeImportPreviewData,
+  TrainingProgram,
+  TrainingProtocolItem,
+  TrainingProgramCategory,
+  TRAINING_PROGRAM_CATEGORY_LABELS_RU,
+  TrainingImportRowResult,
+  TrainingImportPreviewData,
 } from '../types';
 import {
   validateInn,
@@ -3072,3 +3078,630 @@ export function generatePpeCardsPreview(
   return { results, structure_errors: [], summary };
 }
 
+
+// =========================================================================
+// Этап 10 — Обучение по охране труда и проверка знаний (Постановление РФ № 2464)
+// =========================================================================
+
+export const TRAINING_PROGRAMS_HEADERS = [
+  'Организация (ИНН или наименование)',
+  'Наименование программы',
+  'Категория программы',
+  'Трудоемкость (часы)',
+  'Периодичность (мес.)',
+  'Должности / профессии',
+  'Основание разработки',
+];
+
+export const TRAINING_PROGRAMS_ALIASES: Record<string, string> = {
+  'организация': 'legal_entity',
+  'юрлицо': 'legal_entity',
+  'инн': 'legal_entity',
+  'наименование программы': 'name',
+  'программа': 'name',
+  'категория программы': 'category',
+  'категория': 'category',
+  'вид программы': 'category',
+  'программа а/б/в': 'category',
+  'трудоемкость (часы)': 'hours',
+  'трудоемкость': 'hours',
+  'часов': 'hours',
+  'объем часов': 'hours',
+  'периодичность (мес.)': 'recurring_months',
+  'периодичность': 'recurring_months',
+  'должности / профессии': 'positions',
+  'должности': 'positions',
+  'профессии': 'positions',
+  'основание разработки': 'basis',
+  'основание': 'basis',
+};
+
+const TRAINING_CATEGORY_KEYWORDS: Array<[TrainingProgramCategory, string[]]> = [
+  ['program_a', ['программа а', 'общие вопросы', 'суот']],
+  ['program_b', ['программа б', 'вредных', 'опасных производственных факторов']],
+  ['program_c', ['программа в', 'повышенной опасности']],
+  ['first_aid', ['первой помощи', 'первая помощь']],
+  ['ppe_use', ['применению си', 'использованию си', 'средства индивидуальной защиты', 'сиз']],
+  ['intro_briefing', ['вводный']],
+  ['primary_briefing', ['первичный']],
+  ['repeated_briefing', ['повторный']],
+  ['unexpected_briefing', ['внеплановый']],
+  ['targeted_briefing', ['целевой']],
+];
+
+export function resolveTrainingCategory(raw?: string | null): TrainingProgramCategory | null {
+  if (!raw) return null;
+  const s = String(raw).trim().toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ');
+  const keys = Object.keys(TRAINING_PROGRAM_CATEGORY_LABELS_RU) as TrainingProgramCategory[];
+  for (const k of keys) {
+    if (s === k) return k;
+  }
+  for (const [cat, words] of TRAINING_CATEGORY_KEYWORDS) {
+    for (const w of words) {
+      if (s.includes(w)) return cat;
+    }
+  }
+  return null;
+}
+
+export function exportTrainingProgramsToXLSX(
+  programs: TrainingProgram[],
+  leMap: Map<string, LegalEntity>,
+  filename = 'training_programs.xlsx'
+): void {
+  const rows: any[][] = [TRAINING_PROGRAMS_HEADERS];
+  for (const p of programs) {
+    const le = leMap.get(p.legal_entity_id);
+    rows.push([
+      sanitizeCell(le?.short_name || le?.full_name || p.legal_entity_id),
+      sanitizeCell(p.name),
+      sanitizeCell(TRAINING_PROGRAM_CATEGORY_LABELS_RU[p.category] || p.category),
+      p.hours,
+      p.recurring_months ?? '',
+      sanitizeCell(p.positions || ''),
+      sanitizeCell(p.basis || ''),
+    ]);
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = TRAINING_PROGRAMS_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 18) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Программы обучения');
+  XLSX.writeFile(wb, filename);
+}
+
+export function exportTrainingProgramsToCSV(
+  programs: TrainingProgram[],
+  leMap: Map<string, LegalEntity>,
+  filename = 'training_programs.csv'
+): void {
+  const lines: string[] = [];
+  lines.push(TRAINING_PROGRAMS_HEADERS.map(h => `"${h.replace(/"/g, '""')}"`).join(';'));
+  for (const p of programs) {
+    const le = leMap.get(p.legal_entity_id);
+    const row = [
+      le?.short_name || le?.full_name || p.legal_entity_id,
+      p.name,
+      TRAINING_PROGRAM_CATEGORY_LABELS_RU[p.category] || p.category,
+      String(p.hours),
+      p.recurring_months != null ? String(p.recurring_months) : '',
+      p.positions || '',
+      p.basis || '',
+    ];
+    lines.push(row.map(cell => `"${sanitizeCell(cell).replace(/"/g, '""')}"`).join(';'));
+  }
+  const bom = '\uFEFF';
+  const blob = new Blob([bom + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function downloadTrainingProgramsTemplate(): void {
+  const rows: any[][] = [
+    TRAINING_PROGRAMS_HEADERS,
+    [
+      'ООО «Пример»',
+      'Программа обучения по общим вопросам охраны труда и функционирования СУОТ',
+      'Программа А',
+      16,
+      36,
+      'Все работники организации',
+      'Постановление Правительства РФ от 24.12.2021 № 2464, п. 17',
+    ],
+    [
+      'ООО «Пример»',
+      'Обучение безопасным методам и приемам выполнения работ при воздействии вредных производственных факторов',
+      'Программа Б',
+      16,
+      36,
+      'Стропальщик, Электрогазосварщик',
+      'Постановление Правительства РФ от 24.12.2021 № 2464, п. 19',
+    ],
+    [
+      'ООО «Пример»',
+      'Обучение по оказанию первой помощи пострадавшим',
+      'Первая помощь',
+      8,
+      36,
+      'Все работники организации',
+      'Постановление Правительства РФ от 24.12.2021 № 2464, п. 22',
+    ],
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = TRAINING_PROGRAMS_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 20) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Шаблон программ обучения');
+  XLSX.writeFile(wb, 'template_training_programs.xlsx');
+}
+
+export function mapTrainingProgramsHeaders(headers: string[]): Record<string, string> {
+  const mapping: Record<string, string> = {};
+  for (const h of headers) {
+    const clean = h.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (TRAINING_PROGRAMS_ALIASES[clean]) {
+      mapping[h] = TRAINING_PROGRAMS_ALIASES[clean];
+    }
+  }
+  return mapping;
+}
+
+export function generateTrainingProgramsPreview(
+  rows: Record<string, any>[],
+  les: LegalEntity[],
+  existingPrograms: TrainingProgram[],
+  mode: 'add' | 'update'
+): TrainingImportPreviewData {
+  const results: TrainingImportRowResult[] = [];
+
+  rows.forEach((row, idx) => {
+    const res: TrainingImportRowResult = {
+      row: idx + 2, action: 'skip', title: '', errors: [], warnings: [], changes: [], data: {},
+    };
+
+    const leQuery = normalizeText(row.legal_entity);
+    const name = normalizeText(row.name);
+    const categoryRaw = normalizeText(row.category);
+    const hoursRaw = row.hours;
+    const recurringRaw = row.recurring_months;
+
+    res.title = name ? `Программа «${name}»` : `Строка ${idx + 2}`;
+
+    if (!leQuery) res.errors.push('Не указано юридическое лицо (ИНН или наименование).');
+    if (!name) res.errors.push('Не указано наименование программы обучения.');
+
+    const category = resolveTrainingCategory(categoryRaw);
+    if (categoryRaw && !category) {
+      res.errors.push(`Не распознана категория программы «${categoryRaw}».`);
+    }
+
+    const hours = Number(hoursRaw);
+    if (isNaN(hours) || hours <= 0) {
+      res.errors.push('Трудоемкость должна быть положительным числом часов.');
+    } else if ((category === 'program_a' || category === 'program_b') && hours < 16) {
+      res.errors.push('По Постановлению № 2464 программы А и Б — не менее 16 часов.');
+    } else if ((category === 'first_aid' || category === 'ppe_use') && hours < 8) {
+      res.errors.push('По Постановлению № 2464 обучение первой помощи и применению СИЗ — не менее 8 часов.');
+    }
+
+    const recurring =
+      recurringRaw !== undefined && recurringRaw !== null && String(recurringRaw).trim() !== ''
+        ? Number(recurringRaw)
+        : null;
+    if (recurring !== null && (isNaN(recurring) || recurring < 0)) {
+      res.errors.push('Периодичность должна быть неотрицательным числом месяцев (пусто — без периодичности).');
+    }
+
+    res.data = {
+      name,
+      category: category || 'program_a',
+      hours: isNaN(hours) ? 0 : hours,
+      recurring_months: recurring,
+      positions: normalizeText(row.positions),
+      basis: normalizeText(row.basis),
+    };
+
+    let targetLe: LegalEntity | undefined;
+    if (leQuery) {
+      targetLe = les.find(
+        l =>
+          l.status === 'active' &&
+          (l.inn === leQuery ||
+            ciCompare(l.full_name) === ciCompare(leQuery) ||
+            ciCompare(l.short_name || '') === ciCompare(leQuery))
+      );
+      if (!targetLe) {
+        res.errors.push(`Юридическое лицо «${leQuery}» не найдено в базе.`);
+      } else {
+        res.data.legal_entity_id = targetLe.id;
+      }
+    }
+
+    if (res.errors.length > 0) {
+      res.action = 'reject';
+      results.push(res);
+      return;
+    }
+
+    if (targetLe) {
+      const existingMatch = existingPrograms.find(
+        p => p.status === 'active' && p.legal_entity_id === targetLe!.id && ciCompare(p.name) === ciCompare(name)
+      );
+      if (existingMatch) {
+        if (mode === 'update') {
+          res.action = 'update';
+          res.changes.push(`Программа «${name}» найдена в организации. Параметры будут обновлены.`);
+        } else {
+          res.action = 'skip';
+          res.warnings.push(`Программа «${name}» уже существует — строка будет пропущена.`);
+        }
+      } else {
+        res.action = 'add';
+      }
+    }
+
+    results.push(res);
+  });
+
+  const summary = {
+    total: results.length,
+    add: results.filter(r => r.action === 'add').length,
+    update: results.filter(r => r.action === 'update').length,
+    skip: results.filter(r => r.action === 'skip').length,
+    reject: results.filter(r => r.action === 'reject').length,
+  };
+
+  return { results, structure_errors: [], summary };
+}
+
+// --- Протоколы проверки знаний (Постановление № 2464, Приложение № 3) ---
+
+export const TRAINING_PROTOCOLS_HEADERS = [
+  'Организация (ИНН или наименование)',
+  'Номер протокола',
+  'Дата заседания комиссии',
+  'Программа (наименование или категория)',
+  'ФИО работника',
+  'СНИЛС',
+  'Результат (удовлетворительно/неудовлетворительно)',
+  'Председатель ФИО',
+  'Председатель должность',
+  'Член комиссии 1 ФИО',
+  'Член комиссии 1 должность',
+  'Удостоверение выдано (Да/Нет)',
+  'Номер удостоверения',
+  'Регистрационный номер в реестре Минтруда',
+];
+
+export const TRAINING_PROTOCOLS_ALIASES: Record<string, string> = {
+  'организация': 'legal_entity',
+  'юрлицо': 'legal_entity',
+  'инн': 'legal_entity',
+  'номер протокола': 'protocol_number',
+  'протокол': 'protocol_number',
+  'дата заседания комиссии': 'session_date',
+  'дата заседания': 'session_date',
+  'программа': 'program',
+  'программа обучения': 'program',
+  'наименование программы': 'program',
+  'категория программы': 'program',
+  'фио работника': 'fio',
+  'фио': 'fio',
+  'работник': 'fio',
+  'снилс': 'snils',
+  'результат': 'result',
+  'результат проверки знаний': 'result',
+  'председатель фио': 'chairperson_fio',
+  'председатель': 'chairperson_fio',
+  'председатель должность': 'chairperson_position',
+  'член комиссии 1 фио': 'member1_fio',
+  'член комиссии 1': 'member1_fio',
+  'член комиссии 1 должность': 'member1_position',
+  'удостоверение выдано (да/нет)': 'issues_certificate',
+  'выдача удостоверения': 'issues_certificate',
+  'номер удостоверения': 'certificate_number',
+  'регистрационный номер': 'registry_entry_number',
+  'регистрационный номер в реестре минтруда': 'registry_entry_number',
+  'еисот': 'registry_entry_number',
+};
+
+export function exportTrainingProtocolsToXLSX(
+  protocols: TrainingProtocolItem[],
+  leMap: Map<string, LegalEntity>,
+  empMap: Map<string, Employee>,
+  programMap: Map<string, TrainingProgram>,
+  filename = 'training_protocols.xlsx'
+): void {
+  const rows: any[][] = [TRAINING_PROTOCOLS_HEADERS];
+  for (const pr of protocols) {
+    const le = leMap.get(pr.legal_entity_id);
+    const emp = empMap.get(pr.employee_id);
+    const prog = programMap.get(pr.training_program_id);
+    const fio = emp ? `${emp.last_name} ${emp.first_name} ${emp.middle_name || ''}`.trim() : pr.employee_id;
+    const m1 = pr.members[0];
+    rows.push([
+      sanitizeCell(le?.short_name || le?.full_name || pr.legal_entity_id),
+      sanitizeCell(pr.protocol_number),
+      pr.session_date,
+      sanitizeCell(prog ? prog.name : pr.training_program_id),
+      sanitizeCell(fio),
+      sanitizeCell(emp?.snils || ''),
+      pr.result === 'passed' ? 'Удовлетворительно' : 'Неудовлетворительно',
+      sanitizeCell(`${pr.chairperson.last_name} ${pr.chairperson.first_name || ''} ${pr.chairperson.middle_name || ''}`.trim()),
+      sanitizeCell(pr.chairperson.position),
+      m1 ? sanitizeCell(`${m1.last_name} ${m1.first_name || ''} ${m1.middle_name || ''}`.trim()) : '',
+      m1 ? sanitizeCell(m1.position) : '',
+      pr.issues_certificate ? 'Да' : 'Нет',
+      sanitizeCell(pr.certificate_number || ''),
+      sanitizeCell(pr.registry_entry_number || ''),
+    ]);
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = TRAINING_PROTOCOLS_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 18) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Протоколы проверки знаний');
+  XLSX.writeFile(wb, filename);
+}
+
+export function exportTrainingProtocolsToCSV(
+  protocols: TrainingProtocolItem[],
+  leMap: Map<string, LegalEntity>,
+  empMap: Map<string, Employee>,
+  programMap: Map<string, TrainingProgram>,
+  filename = 'training_protocols.csv'
+): void {
+  const lines: string[] = [];
+  lines.push(TRAINING_PROTOCOLS_HEADERS.map(h => `"${h.replace(/"/g, '""')}"`).join(';'));
+  for (const pr of protocols) {
+    const le = leMap.get(pr.legal_entity_id);
+    const emp = empMap.get(pr.employee_id);
+    const prog = programMap.get(pr.training_program_id);
+    const fio = emp ? `${emp.last_name} ${emp.first_name} ${emp.middle_name || ''}`.trim() : pr.employee_id;
+    const m1 = pr.members[0];
+    const row = [
+      le?.short_name || le?.full_name || pr.legal_entity_id,
+      pr.protocol_number,
+      pr.session_date,
+      prog ? prog.name : pr.training_program_id,
+      fio,
+      emp?.snils || '',
+      pr.result === 'passed' ? 'Удовлетворительно' : 'Неудовлетворительно',
+      `${pr.chairperson.last_name} ${pr.chairperson.first_name || ''} ${pr.chairperson.middle_name || ''}`.trim(),
+      pr.chairperson.position,
+      m1 ? `${m1.last_name} ${m1.first_name || ''} ${m1.middle_name || ''}`.trim() : '',
+      m1 ? m1.position : '',
+      pr.issues_certificate ? 'Да' : 'Нет',
+      pr.certificate_number || '',
+      pr.registry_entry_number || '',
+    ];
+    lines.push(row.map(cell => `"${sanitizeCell(cell).replace(/"/g, '""')}"`).join(';'));
+  }
+  const bom = '\uFEFF';
+  const blob = new Blob([bom + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function downloadTrainingProtocolsTemplate(): void {
+  const rows: any[][] = [
+    TRAINING_PROTOCOLS_HEADERS,
+    [
+      'ООО «Пример»',
+      'ПЗ-01/2026',
+      '2026-02-10',
+      'Программа обучения по общим вопросам охраны труда и функционирования СУОТ',
+      'Иванов Иван Иванович',
+      '112-233-445 95',
+      'Удовлетворительно',
+      'Петров Петр Петрович',
+      'Главный инженер, ООО «Пример»',
+      'Сидоров Сергей Сергеевич',
+      'Специалист по охране труда, ООО «Пример»',
+      'Да',
+      '001-УТ-2464',
+      '1234567890',
+    ],
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = TRAINING_PROTOCOLS_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 20) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Шаблон протоколов');
+  XLSX.writeFile(wb, 'template_training_protocols.xlsx');
+}
+
+export function mapTrainingProtocolsHeaders(headers: string[]): Record<string, string> {
+  const mapping: Record<string, string> = {};
+  for (const h of headers) {
+    const clean = h.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (TRAINING_PROTOCOLS_ALIASES[clean]) {
+      mapping[h] = TRAINING_PROTOCOLS_ALIASES[clean];
+    }
+  }
+  return mapping;
+}
+
+export function generateTrainingProtocolsPreview(
+  rows: Record<string, any>[],
+  les: LegalEntity[],
+  employees: Employee[],
+  programs: TrainingProgram[],
+  existingProtocols: TrainingProtocolItem[],
+  mode: 'add' | 'update'
+): TrainingImportPreviewData {
+  const results: TrainingImportRowResult[] = [];
+
+  rows.forEach((row, idx) => {
+    const res: TrainingImportRowResult = {
+      row: idx + 2, action: 'skip', title: '', errors: [], warnings: [], changes: [], data: {},
+    };
+
+    const leQuery = normalizeText(row.legal_entity);
+    const protocolNumber = normalizeText(row.protocol_number);
+    const sessionDate = normalizeText(row.session_date);
+    const programQuery = normalizeText(row.program);
+    const fioQuery = normalizeText(row.fio);
+    const snilsQuery = row.snils ? normalizeSnils(row.snils) : '';
+    const resultRaw = normalizeText(row.result);
+    const chairFio = normalizeText(row.chairperson_fio);
+    const chairPosition = normalizeText(row.chairperson_position);
+    const member1Fio = normalizeText(row.member1_fio);
+    const member1Position = normalizeText(row.member1_position);
+
+    res.title = protocolNumber ? `Протокол № ${protocolNumber}` : `Строка ${idx + 2}`;
+
+    if (!leQuery) res.errors.push('Не указано юридическое лицо (ИНН или наименование).');
+    if (!protocolNumber) res.errors.push('Не указан номер протокола заседания комиссии.');
+    if (!sessionDate || !/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) {
+      res.errors.push('Дата заседания комиссии должна быть в формате ГГГГ-ММ-ДД.');
+    } else {
+      const dateErr = validateDateNotFuture(sessionDate, 'Дата заседания комиссии');
+      if (dateErr) res.errors.push(dateErr);
+    }
+    if (!programQuery) res.errors.push('Не указана программа обучения.');
+    if (!fioQuery && !snilsQuery) res.errors.push('Не указан работник (ФИО или СНИЛС).');
+
+    const resultLower = (resultRaw || '').toLowerCase();
+    let result: 'passed' | 'failed' | null = null;
+    if (['удовлетворительно', 'passed', 'сдал', 'сдан', '+'].includes(resultLower)) result = 'passed';
+    else if (['неудовлетворительно', 'failed', 'не сдал', '-'].includes(resultLower)) result = 'failed';
+    if (!result) res.errors.push(`Не распознан результат проверки знаний «${resultRaw || ''}» (ожидается «удовлетворительно» / «неудовлетворительно»).`);
+
+    const chairWords = chairFio ? chairFio.split(/\s+/) : [];
+    if (!chairFio) res.errors.push('Не указан председатель комиссии (ФИО).');
+    if (!chairPosition) res.warnings.push('Не указана должность председателя комиссии.');
+    if (!member1Fio) res.warnings.push('Не указан член комиссии — по п. 27 Порядка № 2464 комиссия не менее 3 человек.');
+
+    const issuesCertRaw = normalizeText(row.issues_certificate);
+    const issuesCertificate = ['да', 'true', '1', 'yes'].includes((issuesCertRaw || '').toLowerCase());
+
+    res.data = {
+      protocol_number: protocolNumber,
+      session_date: sessionDate,
+      result,
+      chairperson: {
+        position: chairPosition || '',
+        last_name: chairWords[0] || '',
+        first_name: chairWords[1] || null,
+        middle_name: chairWords[2] || null,
+        trained_in_commission_program: false,
+      },
+      members: member1Fio
+        ? [{
+            position: member1Position || '',
+            last_name: member1Fio.split(/\s+/)[0] || '',
+            first_name: member1Fio.split(/\s+/)[1] || null,
+            middle_name: member1Fio.split(/\s+/)[2] || null,
+            trained_in_commission_program: false,
+          }]
+        : [],
+      issues_certificate: issuesCertificate,
+      certificate_number: normalizeText(row.certificate_number),
+      registry_entry_number: normalizeText(row.registry_entry_number),
+    };
+
+    let targetLe: LegalEntity | undefined;
+    if (leQuery) {
+      targetLe = les.find(
+        l =>
+          l.status === 'active' &&
+          (l.inn === leQuery ||
+            ciCompare(l.full_name) === ciCompare(leQuery) ||
+            ciCompare(l.short_name || '') === ciCompare(leQuery))
+      );
+      if (!targetLe) {
+        res.errors.push(`Юридическое лицо «${leQuery}» не найдено в базе.`);
+      } else {
+        res.data.legal_entity_id = targetLe.id;
+      }
+    }
+
+    if (targetLe && programQuery) {
+      const byName = programs.find(
+        p => p.status === 'active' && p.legal_entity_id === targetLe!.id && ciCompare(p.name) === ciCompare(programQuery)
+      );
+      const resolvedCat = resolveTrainingCategory(programQuery);
+      const byCategory = !byName && resolvedCat
+        ? programs.find(p => p.status === 'active' && p.legal_entity_id === targetLe!.id && p.category === resolvedCat)
+        : undefined;
+      const targetProg = byName || byCategory;
+      if (!targetProg) {
+        res.errors.push(`Программа обучения «${programQuery}» не найдена в организации. Сначала импортируйте программы.`);
+      } else {
+        res.data.training_program_id = targetProg.id;
+      }
+    }
+
+    if (targetLe && (fioQuery || snilsQuery)) {
+      const leEmployees = employees.filter(e => e.status === 'active' && e.legal_entity_id === targetLe!.id);
+      let matched: Employee[] = [];
+      if (snilsQuery) {
+        matched = leEmployees.filter(e => normalizeSnils(e.snils || '') === snilsQuery);
+      }
+      if (matched.length === 0 && fioQuery) {
+        const needle = ciCompare(fioQuery);
+        matched = leEmployees.filter(e => {
+          const fio = `${e.last_name} ${e.first_name} ${e.middle_name || ''}`.trim();
+          return ciCompare(fio) === needle;
+        });
+      }
+      if (matched.length === 0) {
+        res.errors.push(`Работник «${fioQuery || 'СНИЛС ' + snilsQuery}» не найден в организации.`);
+      } else {
+        if (matched.length > 1) {
+          res.warnings.push('Найдено несколько работников с таким ФИО — выбран первый. Уточните импорт через СНИЛС.');
+        }
+        res.data.employee_id = matched[0].id;
+        res.title = `Протокол № ${protocolNumber} (${matched[0].last_name} ${matched[0].first_name})`;
+      }
+    }
+
+    if (res.errors.length > 0) {
+      res.action = 'reject';
+      results.push(res);
+      return;
+    }
+
+    if (targetLe) {
+      const existingMatch = existingProtocols.find(
+        p =>
+          p.status === 'active' &&
+          p.legal_entity_id === targetLe!.id &&
+          ciCompare(p.protocol_number) === ciCompare(protocolNumber) &&
+          p.employee_id === res.data.employee_id
+      );
+      if (existingMatch) {
+        if (mode === 'update') {
+          res.action = 'update';
+          res.changes.push(`Протокол № ${protocolNumber} для работника найден. Результаты будут обновлены.`);
+        } else {
+          res.action = 'skip';
+          res.warnings.push(`Протокол № ${protocolNumber} уже зарегистрирован для данного работника — строка будет пропущена.`);
+        }
+      } else {
+        res.action = 'add';
+      }
+    }
+
+    results.push(res);
+  });
+
+  const summary = {
+    total: results.length,
+    add: results.filter(r => r.action === 'add').length,
+    update: results.filter(r => r.action === 'update').length,
+    skip: results.filter(r => r.action === 'skip').length,
+    reject: results.filter(r => r.action === 'reject').length,
+  };
+
+  return { results, structure_errors: [], summary };
+}

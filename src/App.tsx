@@ -31,6 +31,11 @@ import { PpeCardView } from './components/PpeCardView';
 import { PpeCardForm } from './components/PpeCardForm';
 import { PpeNormForm } from './components/PpeNormForm';
 import { PpeImport } from './components/PpeImport';
+import { TrainingList } from './components/TrainingList';
+import { TrainingProtocolView } from './components/TrainingProtocolView';
+import { TrainingProtocolForm } from './components/TrainingProtocolForm';
+import { TrainingProgramForm } from './components/TrainingProgramForm';
+import { TrainingImport } from './components/TrainingImport';
 import { DictionariesView } from './components/DictionariesView';
 import { AuditLogView } from './components/AuditLogView';
 import { BackupView } from './components/BackupView';
@@ -42,6 +47,7 @@ export const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<string>('home');
   const [targetId, setTargetId] = useState<string | undefined>(undefined);
   const [currentLe, setCurrentLe] = useState<LegalEntity | null>(null);
+  const [trainingImportType, setTrainingImportType] = useState<'programs' | 'protocols'>('programs');
 
   const refreshCurrentLe = () => {
     setCurrentLe(storage.getCurrentLegalEntity());
@@ -103,6 +109,24 @@ export const App: React.FC = () => {
         setCurrentView('ppe');
       } else if (hash === 'ppe-card-new' || hash === 'ppe-card-edit' || hash === 'ppe-norm-new' || hash === 'ppe-norm-edit' || hash === 'ppe-import') {
         setCurrentView(hash);
+      } else if (hash.startsWith('training-protocol/')) {
+        const id = hash.replace('training-protocol/', '');
+        setCurrentView('training-protocol-view');
+        setTargetId(id);
+      } else if (hash.startsWith('training-import/')) {
+        setTrainingImportType(hash.replace('training-import/', '') === 'protocols' ? 'protocols' : 'programs');
+        setCurrentView('training-import');
+      } else if (hash === 'training') {
+        setCurrentView('training');
+      } else if (
+        hash === 'training-protocol-new' ||
+        hash === 'training-protocol-edit' ||
+        hash === 'training-protocol-view' ||
+        hash === 'training-program-new' ||
+        hash === 'training-program-edit' ||
+        hash === 'training-import'
+      ) {
+        setCurrentView(hash);
       } else if (hash === 'dictionaries') {
         setCurrentView('dictionaries');
       } else if (hash === 'modules') {
@@ -134,6 +158,11 @@ export const App: React.FC = () => {
       window.location.hash = `medical/${id}`;
     } else if (view === 'ppe-view' && id) {
       window.location.hash = `ppe/${id}`;
+    } else if (view === 'training-protocol-view' && id) {
+      window.location.hash = `training-protocol/${id}`;
+    } else if (view === 'training-import') {
+      if (id === 'protocols' || id === 'programs') setTrainingImportType(id);
+      window.location.hash = `training-import/${id === 'protocols' ? 'protocols' : 'programs'}`;
     } else if (view === 'home') {
       window.location.hash = '';
     } else {
@@ -157,6 +186,7 @@ export const App: React.FC = () => {
         oprEnabled={storage.isModuleEnabled('opr')}
         medicalEnabled={storage.isModuleEnabled('medical')}
         ppeEnabled={storage.isModuleEnabled('ppe')}
+        trainingEnabled={storage.isModuleEnabled('training')}
       />
 
       <main>
@@ -321,6 +351,31 @@ export const App: React.FC = () => {
         )}
 
         {currentView === 'ppe-import' && <PpeImport onNavigate={handleNavigate} />}
+
+        {/* Обучение по охране труда (Этап 10) */}
+        {currentView === 'training' && (
+          <TrainingList onNavigate={handleNavigate} filterLeId={targetId} />
+        )}
+
+        {currentView === 'training-protocol-new' && <TrainingProtocolForm onNavigate={handleNavigate} />}
+
+        {currentView === 'training-protocol-edit' && targetId && (
+          <TrainingProtocolForm id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'training-program-new' && <TrainingProgramForm onNavigate={handleNavigate} />}
+
+        {currentView === 'training-program-edit' && targetId && (
+          <TrainingProgramForm id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'training-protocol-view' && targetId && (
+          <TrainingProtocolView id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'training-import' && (
+          <TrainingImport onNavigate={handleNavigate} initialType={trainingImportType} />
+        )}
 
         {/* Dictionaries */}
         {currentView === 'dictionaries' && <DictionariesView />}
