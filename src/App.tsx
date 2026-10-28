@@ -26,6 +26,11 @@ import { MedicalList } from './components/MedicalList';
 import { MedicalForm } from './components/MedicalForm';
 import { MedicalCardView } from './components/MedicalCardView';
 import { MedicalImport } from './components/MedicalImport';
+import { PpeList } from './components/PpeList';
+import { PpeCardView } from './components/PpeCardView';
+import { PpeCardForm } from './components/PpeCardForm';
+import { PpeNormForm } from './components/PpeNormForm';
+import { PpeImport } from './components/PpeImport';
 import { DictionariesView } from './components/DictionariesView';
 import { AuditLogView } from './components/AuditLogView';
 import { BackupView } from './components/BackupView';
@@ -90,6 +95,14 @@ export const App: React.FC = () => {
         setCurrentView('medical');
       } else if (hash === 'medical-new' || hash === 'medical-edit' || hash === 'medical-import') {
         setCurrentView(hash);
+      } else if (hash.startsWith('ppe/')) {
+        const id = hash.replace('ppe/', '');
+        setCurrentView('ppe-view');
+        setTargetId(id);
+      } else if (hash === 'ppe') {
+        setCurrentView('ppe');
+      } else if (hash === 'ppe-card-new' || hash === 'ppe-card-edit' || hash === 'ppe-norm-new' || hash === 'ppe-norm-edit' || hash === 'ppe-import') {
+        setCurrentView(hash);
       } else if (hash === 'dictionaries') {
         setCurrentView('dictionaries');
       } else if (hash === 'modules') {
@@ -119,6 +132,8 @@ export const App: React.FC = () => {
       window.location.hash = `opr/${id}`;
     } else if (view === 'medical-view' && id) {
       window.location.hash = `medical/${id}`;
+    } else if (view === 'ppe-view' && id) {
+      window.location.hash = `ppe/${id}`;
     } else if (view === 'home') {
       window.location.hash = '';
     } else {
@@ -141,6 +156,7 @@ export const App: React.FC = () => {
         soutEnabled={storage.isModuleEnabled('sout')}
         oprEnabled={storage.isModuleEnabled('opr')}
         medicalEnabled={storage.isModuleEnabled('medical')}
+        ppeEnabled={storage.isModuleEnabled('ppe')}
       />
 
       <main>
@@ -282,6 +298,29 @@ export const App: React.FC = () => {
         )}
 
         {currentView === 'medical-import' && <MedicalImport onNavigate={handleNavigate} />}
+
+        {/* СИЗ (Этап 9) */}
+        {currentView === 'ppe' && (
+          <PpeList onNavigate={handleNavigate} filterLeId={targetId} />
+        )}
+
+        {currentView === 'ppe-card-new' && <PpeCardForm onNavigate={handleNavigate} />}
+
+        {currentView === 'ppe-card-edit' && (
+          <PpeCardForm id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'ppe-norm-new' && <PpeNormForm onNavigate={handleNavigate} />}
+
+        {currentView === 'ppe-norm-edit' && (
+          <PpeNormForm id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'ppe-view' && targetId && (
+          <PpeCardView id={targetId} onNavigate={handleNavigate} />
+        )}
+
+        {currentView === 'ppe-import' && <PpeImport onNavigate={handleNavigate} />}
 
         {/* Dictionaries */}
         {currentView === 'dictionaries' && <DictionariesView />}

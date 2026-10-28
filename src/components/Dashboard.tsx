@@ -25,6 +25,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
     c => c.overall_risk_level === 'high' || c.overall_risk_level === 'unacceptable'
   ).length;
 
+  const medicalEnabled = storage.isModuleEnabled('medical');
+  const medicalCardsRaw = medicalEnabled ? storage.getMedicalCardsRaw() : [];
+  const medicalActive = medicalCardsRaw.filter(c => c.status === 'active');
+  const today = new Date().toISOString().slice(0, 10);
+  const medicalOverdue = medicalActive.filter(c => !!c.next_due_date && c.next_due_date < today).length;
+
+  const ppeEnabled = storage.isModuleEnabled('ppe');
+  const ppeCardsRaw = ppeEnabled ? storage.getPpeCardsRaw() : [];
+  const ppeActive = ppeCardsRaw.filter(c => c.status === 'active');
+  const ppeIssuances = ppeEnabled ? storage.getPpeIssuancesRaw() : [];
+  const ppeOverdueCount = ppeIssuances.filter(
+    i => i.status === 'active' && !i.actual_return_date && i.due_return_date && i.due_return_date < today
+  ).length;
+
   const widgets = [
     {
       id: 'legal_entities',
@@ -74,13 +88,37 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           },
         ]
       : []),
+    ...(medicalEnabled
+      ? [
+          {
+            id: 'medical',
+            title: 'Медосмотры (29н)',
+            value: medicalActive.length,
+            caption: `карт; просрочено осмотров: ${medicalOverdue}`,
+            empty_hint: 'Пока нет карт медосмотров — добавьте первую или импортируйте.',
+            onClick: () => onNavigate('medical'),
+          },
+        ]
+      : []),
+    ...(ppeEnabled
+      ? [
+          {
+            id: 'ppe',
+            title: 'СИЗ (766н/767н)',
+            value: ppeActive.length,
+            caption: `карточек; просрочено замен СИЗ: ${ppeOverdueCount}`,
+            empty_hint: 'Пока нет карточек СИЗ — создайте первую или загрузите нормы ЕТН.',
+            onClick: () => onNavigate('ppe'),
+          },
+        ]
+      : []),
   ];
 
   return (
     <div>
       <h1>Система автоматизации охраны труда</h1>
       <p style={{ color: '#4b5563', marginBottom: '1.25rem' }}>
-        Приложение на этапе разработки (этап 7 — оценка профессиональных рисков по Приказу 776н). Показатели ниже — фактические данные из базы.
+        Комплексная система учёта охраны труда (Этап 9: Средства индивидуальной защиты по Приказам Минтруда 766н/767н ЕТН). Показатели ниже — фактические данные из базы.
       </p>
 
       <div className="widgets">

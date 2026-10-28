@@ -467,6 +467,11 @@ export interface BackupManifest {
     sout_familiarizations?: number;
     opr_cards?: number;
     opr_measures?: number;
+    medical_cards?: number;
+    psychiatric_exams?: number;
+    ppe_norms?: number;
+    ppe_cards?: number;
+    ppe_issuances?: number;
     audit_logs: number;
   };
   data: {
@@ -482,6 +487,9 @@ export interface BackupManifest {
     opr_measures?: OprMeasureItem[];
     medical_cards?: MedicalExaminationCard[];
     psychiatric_exams?: PsychiatricExamination[];
+    ppe_norms?: PpeNormItem[];
+    ppe_cards?: PpeCard[];
+    ppe_issuances?: PpeIssuanceRecord[];
     audit_logs: AuditLogItem[];
   };
 }
@@ -504,6 +512,9 @@ export interface DataIntegrityReport {
     opr_measures?: number;
     medical_cards?: number;
     psychiatric_exams?: number;
+    ppe_norms?: number;
+    ppe_cards?: number;
+    ppe_issuances?: number;
     audit_logs: number;
   };
 }
@@ -596,3 +607,123 @@ export interface MedicalImportPreviewData {
     reject: number;
   };
 }
+
+// ==================== ЭТАП 9: СРЕДСТВА ИНДИВИДУАЛЬНОЙ ЗАЩИТЫ (СИЗ, ПРИКАЗЫ 766н/767н ЕТН) ====================
+
+export type PpeCategory =
+  | 'clothing' // Спецодежда
+  | 'footwear' // Спецобувь
+  | 'hands' // Защита рук (перчатки, рукавицы)
+  | 'head' // Защита головы (каски, подшлемники)
+  | 'eyes_face' // Защита глаз и лица (очки, щитки)
+  | 'respiratory' // Защита органов дыхания (респираторы, противогазы)
+  | 'hearing' // Защита органов слуха (наушники, беруши)
+  | 'fall_protection' // Защита от падения с высоты (привязи, стропы)
+  | 'dermatological' // Дерматологические СИЗ и смывающие средства
+  | 'other'; // Прочие СИЗ
+
+export const PPE_CATEGORY_LABELS_RU: Record<PpeCategory, string> = {
+  clothing: 'Специальная одежда',
+  footwear: 'Специальная обувь',
+  hands: 'Средства защиты рук',
+  head: 'Средства защиты головы',
+  eyes_face: 'Средства защиты глаз и лица',
+  respiratory: 'Средства защиты органов дыхания',
+  hearing: 'Средства защиты органов слуха',
+  fall_protection: 'Средства защиты от падения с высоты',
+  dermatological: 'Дерматологические СИЗ и смывающие средства',
+  other: 'Прочие средства защиты',
+};
+
+export interface PpeNormItem {
+  id: string;
+  legal_entity_id: string;
+  department_id?: string | null;
+  position_id: string;
+  ppe_type: PpeCategory;
+  ppe_name: string;
+  protection_properties?: string | null;
+  quantity_per_period: number;
+  period_months: number; // 0 = «до износа»
+  unit: string; // шт., пар, компл., мл, туб
+  is_duty: boolean; // признак дежурного СИЗ
+  norm_basis?: string | null; // пункт ЕТН (Приказ 767н) или ЛНА
+  hazard_or_factor?: string | null; // опасность по 776н / вредный фактор по СОУТ
+  status: EntityStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PpeCard {
+  id: string;
+  card_number: string; // «СИЗ-001», уникален в пределах юрлица
+  legal_entity_id: string;
+  employee_id: string;
+  height?: number | null; // рост в см (например, 176)
+  clothing_size?: string | null; // размер одежды (например, «48-50 / 170-176»)
+  shoe_size?: string | null; // размер обуви (например, «42»)
+  headwear_size?: string | null; // размер головного убора (например, «58»)
+  gasmask_size?: string | null; // размер респиратора/противогаза (например, «2»)
+  gloves_size?: string | null; // размер перчаток (например, «9»)
+  status: EntityStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export type PpeReturnReason = 'wear' | 'dismissal' | 'unfit' | 'transfer' | 'other';
+
+export const PPE_RETURN_REASON_LABELS_RU: Record<PpeReturnReason, string> = {
+  wear: 'Истечение срока носки (износ)',
+  dismissal: 'Увольнение работника',
+  unfit: 'Пришло в негодность (аварийное списание)',
+  transfer: 'Перевод на другую работу',
+  other: 'Прочая причина',
+};
+
+export interface PpeIssuanceRecord {
+  id: string;
+  legal_entity_id: string;
+  ppe_card_id: string;
+  employee_id: string;
+  ppe_norm_item_id?: string | null;
+  ppe_name: string;
+  ppe_type: PpeCategory;
+  protection_properties?: string | null;
+  model_or_article?: string | null;
+  issue_date: string; // YYYY-MM-DD
+  quantity: number;
+  unit: string;
+  wear_period_months: number; // 0 = «до износа»
+  due_return_date?: string | null; // YYYY-MM-DD
+  actual_return_date?: string | null; // YYYY-MM-DD
+  return_reason?: PpeReturnReason | null;
+  return_reason_text?: string | null;
+  doc_number?: string | null; // номер ведомости / акта / накладной / эл. подписи
+  status: EntityStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PpeImportRowResult {
+  row: number;
+  action: 'add' | 'update' | 'skip' | 'reject';
+  title: string;
+  errors: string[];
+  warnings: string[];
+  changes: string[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: Record<string, any>;
+}
+
+export interface PpeImportPreviewData {
+  results: PpeImportRowResult[];
+  structure_errors: string[];
+  summary: {
+    total: number;
+    add: number;
+    update: number;
+    skip: number;
+    reject: number;
+  };
+}
+

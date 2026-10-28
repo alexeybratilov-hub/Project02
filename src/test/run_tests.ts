@@ -915,38 +915,6 @@ assert.equal(storage.isModuleEnabled('opr'), true);
 console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–7 УСПЕШНО ПРОЙДЕНЫ (21/21)!');
 
 // 22. Medical examinations (Stage 8): card CRUD, date validations, links to LE/employee/contingent/SOUT
-
-// [TEMP-DIAG] begin
-const _diagCounters: Record<string, number> = {};
-const _diagTimes: Record<string, number> = {};
-{
-  const st: any = storage;
-  for (const name of ['getAuditLogs','saveAuditLogsRaw','addAudit','createMedicalCard','updateMedicalCard','validateMedicalRefs','getEmployeesRaw','getLegalEntitiesRaw','getContingentRecordById','getEmployeeById','getSoutCardById','getDepartmentById','createBackup','verifyDataIntegrity','listMedicalCards']) {
-    if (typeof st[name] === 'function') {
-      const orig = st[name].bind(st);
-      _diagCounters[name] = 0; _diagTimes[name] = 0;
-      st[name] = (...args: any[]) => {
-        _diagCounters[name]++;
-        const t0 = process.hrtime.bigint();
-        const r = orig(...args);
-        _diagTimes[name] += Number(process.hrtime.bigint() - t0) / 1e6;
-        return r;
-      };
-    }
-  }
-}
-let _diagLastMark = Date.now();
-const _diagLog = (mark: string) => {
-  const now = Date.now();
-  console.error(`[DIAG] ${mark} +${now - _diagLastMark}ms counters=${JSON.stringify(_diagCounters)}`);
-  _diagLastMark = now;
-};
-process.on('exit', () => { try { console.error('[DIAG-EXIT] ' + JSON.stringify({counters:_diagCounters, ms:_diagTimes})); } catch {} });
-const _origCreateMedicalCard = storage.createMedicalCard.bind(storage);
-_diagLog('BEFORE_BLOCK22');
-storage.createMedicalCard = ((data: any) => { _diagLog('createMedicalCard:' + (data?.card_number ?? '?')); return _origCreateMedicalCard(data); }) as any;
-// [TEMP-DIAG] end
-
 console.log('[22/24] Тестирование карт медосмотров (Приказ 29н): CRUD, валидация дат и сроков, связи с СОУТ и контингентом...');
 
 import { mapMedicalHeaders, generateMedicalPreview, MEDICAL_HEADERS } from '../services/excel';
@@ -994,7 +962,7 @@ const medCard2 = storage.createMedicalCard({
   exam_type: 'periodic',
   referral_date: '2024-02-01',
   exam_date: '2024-03-01',
-  next_due_date: '2026-03-01',
+  next_due_date: '2030-03-01',
   clinic_name: 'ГБУЗ «Центр профпатологии»',
   doctor_fio: 'Петрова А.С.',
   conclusion: 'fit',
@@ -1149,7 +1117,7 @@ assert.equal(medCardOtherLe.legal_entity_id, otherLe.id);
 // Update: fill in results of the pending preliminary exam
 const medCard1Updated = storage.updateMedicalCard(medCard1.id, {
   exam_date: '2024-03-15',
-  next_due_date: '2026-03-15',
+  next_due_date: '2030-03-15',
   conclusion: 'fit_restrictions',
   conclusion_details: 'Ограничения по высоте выше 3 м',
   contraindications_found: true,
@@ -1159,11 +1127,10 @@ assert.equal(medCard1Updated.exam_date, '2024-03-15');
 assert.equal(medCard1Updated.contraindications_found, true);
 // Invalid update is rejected and data stays intact
 assert.throws(() => storage.updateMedicalCard(medCard1.id, { next_due_date: '2024-01-01' }), /Срок следующего медосмотра должен быть позже/);
-assert.equal(storage.getMedicalCardById(medCard1.id)?.next_due_date, '2026-03-15');
+assert.equal(storage.getMedicalCardById(medCard1.id)?.next_due_date, '2030-03-15');
 assert.throws(() => storage.updateMedicalCard('ghost-med-id', { conclusion: 'fit' }), /Карта медосмотра не найдена/);
 
 // List filters: by type, conclusion, overdue flag, search
-_diagLog('M1-before-periodicList');
 const periodicList = storage.listMedicalCards({ legal_entity_id: testLe.id, exam_type: 'periodic' });
 assert.equal(periodicList.total, 1);
 assert.equal(periodicList.items[0].id, medCard2.id);
@@ -1175,27 +1142,22 @@ const overdueCard = storage.createMedicalCard({
   legal_entity_id: testLe.id,
   employee_id: testEmp.employee.id,
   exam_type: 'periodic',
-  exam_date: '2024-01-10',
-  next_due_date: '2025-01-10',
+  exam_date: '2020-01-10',
+  next_due_date: '2021-01-10',
   conclusion: 'fit',
 });
-_diagLog('M2-before-overdueList');
 const overdueList = storage.listMedicalCards({ overdue: true });
 assert.ok(overdueList.items.some(c => c.id === overdueCard.id));
 assert.ok(!overdueList.items.some(c => c.id === medCard1.id || c.id === medCard2.id || c.id === medCardOtherLe.id));
-_diagLog('M3-before-searchByClinic');
 const searchByClinic = storage.listMedicalCards({ search: 'профпатологии' });
 assert.equal(searchByClinic.total, 1);
-_diagLog('M4-before-searchByFio');
 const searchByFio = storage.listMedicalCards({ search: 'кузнецов алексей' });
 assert.ok(searchByFio.total >= 2);
 
 // Archive/restore lifecycle: archived cards hidden from active list, unique number freed
-_diagLog('M5-before-archive');
 const archivedMed = storage.archiveMedicalCard(medCardOtherLe.id);
 assert.equal(archivedMed.status, 'archived');
 assert.equal(storage.listMedicalCards({ legal_entity_id: otherLe.id }).total, 0);
-_diagLog('M6-before-afterArchiveNumber');
 const afterArchiveNumber = storage.createMedicalCard({
   card_number: 'МЕД-001',
   legal_entity_id: otherLe.id,
@@ -1205,7 +1167,6 @@ const afterArchiveNumber = storage.createMedicalCard({
 });
 assert.ok(afterArchiveNumber.id);
 assert.throws(() => storage.archiveMedicalCard(medCardOtherLe.id), /уже в архиве/);
-_diagLog('M7-before-restore');
 const restoredMed = storage.restoreMedicalCard(medCardOtherLe.id);
 assert.equal(restoredMed.status, 'active');
 assert.throws(
@@ -1220,8 +1181,6 @@ assert.throws(
   /уже зарегистрирована/
 );
 
-_diagLog('M8-end-block22');
-// 23. Psychiatric examinations
 // 23. Psychiatric examinations (Order 342н) within module 'medical': CRUD and date bounds
 console.log('[23/24] Тестирование психиатрических освидетельствований (Приказ 342н): создание, сроки действия заключения...');
 
@@ -1232,11 +1191,11 @@ const psychExam1 = storage.createPsychiatricExam({
   commission_members: 'Психиатр Иванов И.И., нарколог Сидоров С.С.',
   conclusion: 'fit',
   conclusion_protocol_number: 'Протокол № 12/24',
-  valid_until: '2026-04-01',
+  valid_until: '2030-04-01',
   basis: 'Периодическое освидетельствование, Приказ 342н',
 });
 assert.equal(psychExam1.conclusion, 'fit');
-assert.equal(psychExam1.valid_until, '2026-04-01');
+assert.equal(psychExam1.valid_until, '2030-04-01');
 assert.ok(psychExam1.id);
 
 // valid_until must be later than exam_date
@@ -1317,7 +1276,7 @@ assert.equal(MEDICAL_HEADERS.length, 12);
 // Import preview: valid row, bad exam type, unknown LE, missing dates
 const existingCards = storage.getMedicalCardsRaw();
 const medPreviewRows = [
-  ['ООО «Другое»', '', '112-233-445 95', 'МЕД-IMP-1', 'Предварительный', '', '', '', '', '', '', ''],
+  [testLe.short_name || 'ООО «САОТ-Тест»', '', '112-233-445 95', 'МЕД-IMP-1', 'Предварительный', '', '', '', '', '', '', ''],
   [testLe.short_name || '', 'Кузнецов Алексей Сергеевич', '', 'МЕД-IMP-2', 'Экзотический', '', '', '', '', '', '', ''],
   ['ООО «Нет такой организации»', 'Иванов И.И.', '', 'МЕД-IMP-3', 'Периодический', '', '', '', '', '', '', ''],
   [testLe.short_name || '', 'Кузнецов А.С.', '', 'МЕД-IMP-4', 'Периодический', '01.02.2024', '01.03.2024', '01.03.2026', 'Клиника', 'Врач В.В.', 'Годен', ''],
@@ -1352,9 +1311,10 @@ storage.saveMedicalCardsRaw(rawMedCards);
 const brokenMed = storage.verifyDataIntegrity();
 assert.equal(brokenMed.valid, false);
 assert.ok(brokenMed.errors.some(e => e.includes('Карта медосмотра') && e.includes('несуществующую карту СОУТ')));
-const fixTarget = storage.getMedicalCardsRaw().find(c => c.sout_card_id === 'ghost-sout-link')!;
+const cardsToFix = storage.getMedicalCardsRaw();
+const fixTarget = cardsToFix.find(c => c.sout_card_id === 'ghost-sout-link')!;
 fixTarget.sout_card_id = savedSoutLink || null;
-storage.saveMedicalCardsRaw(storage.getMedicalCardsRaw());
+storage.saveMedicalCardsRaw(cardsToFix);
 assert.equal(storage.verifyDataIntegrity().valid, true);
 
 // Referential integrity: wrong LE-employee pairing passes undetected only if consistent — check via create instead
@@ -1401,6 +1361,604 @@ assert.ok(storage.getMedicalCardsRaw().some(c => c.card_number === 'МЕД-002')
 assert.equal(storage.verifyDataIntegrity().valid, true);
 assert.equal(storage.isModuleEnabled('medical'), true);
 
-console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–8 УСПЕШНО ПРОЙДЕНЫ (24/24)!');
+// 25. PPE Norms (Stage 9, ЕТН по Приказу Минтруда 767н)
+console.log('[25/27] Тестирование норм выдачи СИЗ (Приказ Минтруда 767н ЕТН): CRUD, валидация периодов/количеств, категории, поиск...');
+
+import {
+  mapPpeNormsHeaders,
+  generatePpeNormsPreview,
+  PPE_NORMS_HEADERS,
+  mapPpeCardsHeaders,
+  generatePpeCardsPreview,
+  PPE_CARDS_HEADERS,
+} from '../services/excel';
+
+// Disabled module blocks creation before validation
+assert.equal(storage.isModuleEnabled('ppe'), false);
+assert.throws(
+  () =>
+    storage.createPpeNorm({
+      legal_entity_id: testLe.id,
+      position_id: testPos.id,
+      ppe_type: 'clothing',
+      ppe_name: 'Костюм рабочий',
+      quantity_per_period: 1,
+      period_months: 12,
+      unit: 'шт.',
+    }),
+  /Модуль «СИЗ» отключён/
+);
+// Enable the module for further tests
+storage.toggleModule('ppe');
+assert.equal(storage.isModuleEnabled('ppe'), true);
+
+// Validation checks on createPpeNorm
+assert.throws(
+  () =>
+    storage.createPpeNorm({
+      legal_entity_id: testLe.id,
+      position_id: testPos.id,
+      ppe_type: 'clothing',
+      ppe_name: '',
+      quantity_per_period: 1,
+      period_months: 12,
+      unit: 'шт.',
+    }),
+  /Наименование СИЗ обязательно/
+);
+assert.throws(
+  () =>
+    storage.createPpeNorm({
+      legal_entity_id: testLe.id,
+      position_id: testPos.id,
+      ppe_type: 'clothing',
+      ppe_name: 'Костюм',
+      quantity_per_period: 0,
+      period_months: 12,
+      unit: 'шт.',
+    }),
+  /Количество выдачи должно быть положительным числом/
+);
+assert.throws(
+  () =>
+    storage.createPpeNorm({
+      legal_entity_id: testLe.id,
+      position_id: testPos.id,
+      ppe_type: 'clothing',
+      ppe_name: 'Костюм',
+      quantity_per_period: 1,
+      period_months: -5,
+      unit: 'шт.',
+    }),
+  /Период носки должен быть неотрицательным числом/
+);
+assert.throws(
+  () =>
+    storage.createPpeNorm({
+      legal_entity_id: testLe.id,
+      position_id: 'ghost-pos-id',
+      ppe_type: 'clothing',
+      ppe_name: 'Костюм',
+      quantity_per_period: 1,
+      period_months: 12,
+      unit: 'шт.',
+    }),
+  /Должность не найдена/
+);
+assert.throws(
+  () =>
+    storage.createPpeNorm({
+      legal_entity_id: testLe.id,
+      position_id: testPos.id,
+      department_id: otherDept.id, // belongs to otherLe
+      ppe_type: 'clothing',
+      ppe_name: 'Костюм',
+      quantity_per_period: 1,
+      period_months: 12,
+      unit: 'шт.',
+    }),
+  /Подразделение не найдено или принадлежит другому юридическому лицу/
+);
+
+// Create valid norms: standard wear period & duty PPE
+const norm1 = storage.createPpeNorm({
+  legal_entity_id: testLe.id,
+  position_id: testPos.id,
+  department_id: testDept.id,
+  ppe_type: 'clothing',
+  ppe_name: 'Костюм для защиты от общих производственных загрязнений',
+  protection_properties: 'ЗМи',
+  quantity_per_period: 1,
+  period_months: 12,
+  unit: 'компл.',
+  is_duty: false,
+  norm_basis: 'п. 12 ЕТН Приказ 767н',
+  hazard_or_factor: 'Общие производственные загрязнения',
+});
+assert.equal(norm1.ppe_type, 'clothing');
+assert.equal(norm1.quantity_per_period, 1);
+assert.equal(norm1.period_months, 12);
+assert.equal(norm1.is_duty, false);
+
+const norm2Duty = storage.createPpeNorm({
+  legal_entity_id: testLe.id,
+  position_id: testPos.id,
+  ppe_type: 'head',
+  ppe_name: 'Каска защитная',
+  protection_properties: 'Му',
+  quantity_per_period: 1,
+  period_months: 0, // до износа
+  unit: 'шт.',
+  is_duty: true,
+  norm_basis: 'п. 45 ЕТН Приказ 767н',
+});
+assert.equal(norm2Duty.ppe_type, 'head');
+assert.equal(norm2Duty.period_months, 0);
+assert.equal(norm2Duty.is_duty, true);
+
+// Update norm
+const updatedNorm = storage.updatePpeNorm(norm1.id, {
+  quantity_per_period: 2,
+  protection_properties: 'ЗМи + водоотталкивающая пропитка',
+});
+assert.equal(updatedNorm.quantity_per_period, 2);
+assert.equal(updatedNorm.protection_properties, 'ЗМи + водоотталкивающая пропитка');
+
+// Filter and search
+const normsList = storage.listPpeNorms({ legal_entity_id: testLe.id });
+assert.equal(normsList.total, 2);
+const dutyList = storage.listPpeNorms({ legal_entity_id: testLe.id, is_duty: true });
+assert.equal(dutyList.total, 1);
+assert.equal(dutyList.items[0].id, norm2Duty.id);
+const searchList = storage.listPpeNorms({ search: 'каска' });
+assert.equal(searchList.total, 1);
+assert.equal(searchList.items[0].id, norm2Duty.id);
+
+// Archive and restore norm
+const archivedNorm = storage.archivePpeNorm(norm2Duty.id);
+assert.equal(archivedNorm.status, 'archived');
+assert.equal(storage.listPpeNorms({ legal_entity_id: testLe.id }).total, 1);
+const restoredNorm = storage.restorePpeNorm(norm2Duty.id);
+assert.equal(restoredNorm.status, 'active');
+assert.equal(storage.listPpeNorms({ legal_entity_id: testLe.id }).total, 2);
+
+// 26. PPE Personal Cards & Issuances (Stage 9, Приказ Минтруда 766н)
+console.log('[26/27] Тестирование личных карточек учёта выдачи СИЗ и записей выдачи (Приказ Минтруда 766н): сроки носки, возврат/списание, просрочка...');
+
+// Card validation & creation
+assert.throws(
+  () =>
+    storage.createPpeCard({
+      card_number: 'СИЗ-001',
+      legal_entity_id: otherLe.id,
+      employee_id: testEmp.employee.id, // belongs to testLe
+    }),
+  /Работник относится к другому юридическому лицу/
+);
+assert.throws(
+  () =>
+    storage.createPpeCard({
+      card_number: 'СИЗ-001',
+      legal_entity_id: testLe.id,
+      employee_id: 'ghost-emp-id',
+    }),
+  /Работник не найден/
+);
+
+// Valid card creation with anthropometric measurements
+const ppeCard1 = storage.createPpeCard({
+  card_number: 'СИЗ-001',
+  legal_entity_id: testLe.id,
+  employee_id: testEmp.employee.id,
+  height: 182,
+  clothing_size: '50-52 / 182-188',
+  shoe_size: '43',
+  headwear_size: '58',
+  gasmask_size: '2',
+  gloves_size: '9',
+});
+assert.equal(ppeCard1.card_number, 'СИЗ-001');
+assert.equal(ppeCard1.height, 182);
+assert.equal(ppeCard1.clothing_size, '50-52 / 182-188');
+assert.equal(ppeCard1.shoe_size, '43');
+assert.equal(ppeCard1.status, 'active');
+
+// Duplicate card number in same LE is blocked
+const testEmp2 = storage.createEmployee({
+  legal_entity_id: testLe.id,
+  department_id: testDept.id,
+  position_id: testPos.id,
+  last_name: 'Сидоров',
+  first_name: 'Петр',
+  hire_date: '2024-02-01',
+});
+assert.throws(
+  () =>
+    storage.createPpeCard({
+      card_number: 'сиз-001',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp2.employee.id,
+    }),
+  /уже существует в данном юридическом лице/
+);
+
+// One active card per employee constraint (Order 766н)
+assert.throws(
+  () =>
+    storage.createPpeCard({
+      card_number: 'СИЗ-002',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+    }),
+  /У работника уже есть активная карточка СИЗ/
+);
+
+// Card for employee in another LE
+const ppeCardOther = storage.createPpeCard({
+  card_number: 'СИЗ-001', // same number in different LE is allowed
+  legal_entity_id: otherLe.id,
+  employee_id: empOtherRes.employee.id,
+  height: 175,
+  clothing_size: '48-50',
+  shoe_size: '42',
+});
+assert.equal(ppeCardOther.legal_entity_id, otherLe.id);
+
+// Card update
+const updatedCard = storage.updatePpeCard(ppeCard1.id, {
+  shoe_size: '44',
+});
+assert.equal(updatedCard.shoe_size, '44');
+
+// Card listing
+const ppeCardList = storage.listPpeCards({ legal_entity_id: testLe.id });
+assert.equal(ppeCardList.total, 1);
+assert.equal(ppeCardList.items[0].id, ppeCard1.id);
+
+// Issuance creation on card
+// Validation checks
+assert.throws(
+  () =>
+    storage.createPpeIssuance({
+      ppe_card_id: 'ghost-card-id',
+      ppe_name: 'Перчатки',
+      ppe_type: 'hands',
+      issue_date: '2024-04-01',
+      quantity: 1,
+      unit: 'пар',
+      wear_period_months: 1,
+    }),
+  /Личная карточка СИЗ не найдена/
+);
+assert.throws(
+  () =>
+    storage.createPpeIssuance({
+      ppe_card_id: ppeCard1.id,
+      ppe_name: '',
+      ppe_type: 'hands',
+      issue_date: '2024-04-01',
+      quantity: 1,
+      unit: 'пар',
+      wear_period_months: 1,
+    }),
+  /Наименование выданного СИЗ обязательно/
+);
+assert.throws(
+  () =>
+    storage.createPpeIssuance({
+      ppe_card_id: ppeCard1.id,
+      ppe_name: 'Перчатки',
+      ppe_type: 'hands',
+      issue_date: '2024-04-01',
+      quantity: 0,
+      unit: 'пар',
+      wear_period_months: 1,
+    }),
+  /Количество выдачи должно быть положительным числом/
+);
+
+// Valid issuance: 12 months wear period -> computes exact due_return_date
+const issuance1 = storage.createPpeIssuance({
+  ppe_card_id: ppeCard1.id,
+  ppe_norm_item_id: norm1.id,
+  ppe_name: 'Костюм рабочий',
+  ppe_type: 'clothing',
+  protection_properties: 'ЗМи',
+  model_or_article: 'Арт. 1024',
+  issue_date: '2026-06-01',
+  quantity: 1,
+  unit: 'компл.',
+  wear_period_months: 12,
+  doc_number: 'ЭДО-2026-001',
+});
+assert.equal(issuance1.ppe_card_id, ppeCard1.id);
+assert.equal(issuance1.employee_id, testEmp.employee.id);
+assert.equal(issuance1.due_return_date, '2027-06-01');
+assert.equal(issuance1.actual_return_date, null);
+assert.equal(issuance1.status, 'active');
+
+// Duty PPE issuance: wear_period_months = 0 -> due_return_date is null (до износа)
+const dutyIssuance = storage.createPpeIssuance({
+  ppe_card_id: ppeCard1.id,
+  ppe_norm_item_id: norm2Duty.id,
+  ppe_name: 'Каска защитная',
+  ppe_type: 'head',
+  issue_date: '2024-01-15',
+  quantity: 1,
+  unit: 'шт.',
+  wear_period_months: 0,
+});
+assert.equal(dutyIssuance.due_return_date, null);
+
+// Overdue issuance: issued in 2020 for 12 months -> due date in 2021 -> flagged as overdue
+const overdueIssuance = storage.createPpeIssuance({
+  ppe_card_id: ppeCard1.id,
+  ppe_name: 'Очки защитные открытые',
+  ppe_type: 'eyes_face',
+  issue_date: '2020-02-01',
+  quantity: 1,
+  unit: 'шт.',
+  wear_period_months: 12,
+});
+assert.equal(overdueIssuance.due_return_date, '2021-02-01');
+
+// Check overdue filter
+const overduePpeList = storage.listPpeIssuances(ppeCard1.id, { overdue: true });
+assert.ok(overduePpeList.some(i => i.id === overdueIssuance.id));
+assert.ok(!overduePpeList.some(i => i.id === issuance1.id || i.id === dutyIssuance.id));
+const cardsWithOverdue = storage.listPpeCards({ has_overdue: true });
+assert.ok(cardsWithOverdue.items.some(c => c.id === ppeCard1.id));
+
+// Return / write-off issuance
+assert.throws(
+  () =>
+    storage.returnPpeIssuance(overdueIssuance.id, {
+      actual_return_date: '2019-01-01', // earlier than issue_date
+      return_reason: 'wear',
+    }),
+  /Дата сдачи СИЗ не может быть раньше даты выдачи/
+);
+
+const returnedIssuance = storage.returnPpeIssuance(overdueIssuance.id, {
+  actual_return_date: '2021-02-10',
+  return_reason: 'wear',
+  return_reason_text: 'Полный естественный износ',
+});
+assert.equal(returnedIssuance.actual_return_date, '2021-02-10');
+assert.equal(returnedIssuance.return_reason, 'wear');
+assert.equal(returnedIssuance.return_reason_text, 'Полный естественный износ');
+
+// Once returned, no longer overdue
+const overdueListAfter = storage.listPpeIssuances(ppeCard1.id, { overdue: true });
+assert.ok(!overdueListAfter.some(i => i.id === overdueIssuance.id));
+
+// Archive and restore card lifecycle
+const archivedCard = storage.archivePpeCard(ppeCardOther.id);
+assert.equal(archivedCard.status, 'archived');
+assert.equal(storage.listPpeCards({ legal_entity_id: otherLe.id }).total, 0);
+// Once archived, another active card can be created for the same employee if needed
+const newCardForOther = storage.createPpeCard({
+  card_number: 'СИЗ-002',
+  legal_entity_id: otherLe.id,
+  employee_id: empOtherRes.employee.id,
+});
+assert.ok(newCardForOther.id);
+// Cleaning up so other can be restored or left archived
+storage.archivePpeCard(newCardForOther.id);
+const restoredCard = storage.restorePpeCard(ppeCardOther.id);
+assert.equal(restoredCard.status, 'active');
+
+// 27. PPE Integrity, Backup & Excel Import/Export (Stage 9)
+console.log('[27/27] Тестирование целостности данных, резервного копирования и импорта/экспорта СИЗ (Приказы 766н/767н)...');
+
+// Header mapping & aliases: Norms
+const ppeNormsHeadersMap = mapPpeNormsHeaders([
+  'Организация',
+  'Подразделение',
+  'Должность',
+  'Наименование СИЗ',
+  'Вид СИЗ',
+  'Защитные свойства',
+  'Количество',
+  'Срок носки (мес.)',
+  'Единица измерения',
+  'Дежурное',
+  'Основание нормы',
+  'Опасность',
+]);
+assert.ok(Object.values(ppeNormsHeadersMap).includes('legal_entity'));
+assert.ok(Object.values(ppeNormsHeadersMap).includes('position'));
+assert.ok(Object.values(ppeNormsHeadersMap).includes('ppe_name'));
+assert.ok(Object.values(ppeNormsHeadersMap).includes('ppe_type'));
+assert.ok(Object.values(ppeNormsHeadersMap).includes('quantity'));
+assert.ok(Object.values(ppeNormsHeadersMap).includes('period_months'));
+assert.ok(Object.values(ppeNormsHeadersMap).includes('unit'));
+assert.equal(PPE_NORMS_HEADERS.length, 12);
+
+// Norms Import Preview
+const existingNorms = storage.getPpeNormsRaw();
+const ppeNormPreviewRows = [
+  { legal_entity: testLe.short_name || 'ООО «САОТ-Тест»', position: testPos.name, ppe_name: 'Перчатки защитные от механических воздействий', ppe_type: 'Защита рук', protection_properties: 'Ми', quantity: 6, period_months: 12, unit: 'пар', is_duty: 'Нет', norm_basis: 'п. 55 ЕТН' },
+  { legal_entity: 'ООО «Нет такой организации»', position: 'Токарь', ppe_name: 'Халат', ppe_type: 'Спецодежда', quantity: 1, period_months: 12, unit: 'шт.', is_duty: 'Нет' },
+  { legal_entity: testLe.short_name || '', position: '', ppe_name: 'Каска', ppe_type: 'Защита головы', quantity: 1, period_months: 0, unit: 'шт.', is_duty: 'Да' },
+  { legal_entity: testLe.short_name || '', position: testPos.name, ppe_name: '', ppe_type: 'Спецодежда', quantity: 1, period_months: 12, unit: 'шт.', is_duty: 'Нет' },
+];
+const normPreview = generatePpeNormsPreview(
+  ppeNormPreviewRows,
+  storage.listLegalEntities({ pageSize: 1000 }).items,
+  storage.getDepartmentsRaw(),
+  storage.getPositionsRaw(),
+  existingNorms,
+  'add'
+);
+assert.equal(normPreview.results.length, 4);
+assert.equal(normPreview.results[0].action, 'add');
+assert.equal(normPreview.results[0].data.ppe_type, 'hands');
+assert.equal(normPreview.results[1].action, 'reject');
+assert.ok(normPreview.results[1].errors.some(e => e.includes('не найдено в базе')));
+assert.equal(normPreview.results[2].action, 'reject');
+assert.ok(normPreview.results[2].errors.some(e => e.includes('Не указана должность')));
+assert.equal(normPreview.results[3].action, 'reject');
+assert.ok(normPreview.results[3].errors.some(e => e.includes('Не указано наименование СИЗ')));
+
+// Header mapping & aliases: Cards
+const ppeCardsHeadersMap = mapPpeCardsHeaders([
+  'Организация',
+  'Номер карточки СИЗ',
+  'ФИО работника',
+  'СНИЛС',
+  'Рост (см)',
+  'Размер одежды',
+  'Размер обуви',
+  'Размер головного убора',
+  'Респиратор',
+  'Размер перчаток',
+]);
+assert.ok(Object.values(ppeCardsHeadersMap).includes('legal_entity'));
+assert.ok(Object.values(ppeCardsHeadersMap).includes('card_number'));
+assert.ok(Object.values(ppeCardsHeadersMap).includes('fio'));
+assert.ok(Object.values(ppeCardsHeadersMap).includes('snils'));
+assert.ok(Object.values(ppeCardsHeadersMap).includes('height'));
+assert.ok(Object.values(ppeCardsHeadersMap).includes('clothing_size'));
+assert.ok(Object.values(ppeCardsHeadersMap).includes('shoe_size'));
+assert.ok(Object.values(ppeCardsHeadersMap).includes('headwear_size'));
+assert.ok(Object.values(ppeCardsHeadersMap).includes('gasmask_size'));
+assert.ok(Object.values(ppeCardsHeadersMap).includes('gloves_size'));
+assert.equal(PPE_CARDS_HEADERS.length, 10);
+
+// Cards Import Preview
+const existingCardsPpe = storage.getPpeCardsRaw();
+const ppeCardPreviewRows = [
+  { legal_entity: testLe.short_name || 'ООО «САОТ-Тест»', card_number: 'СИЗ-IMP-1', fio: 'Сидоров Петр', snils: '', height: 178, clothing_size: '50-52', shoe_size: '42' },
+  { legal_entity: 'ООО «Нет такой организации»', card_number: 'СИЗ-IMP-2', fio: 'Иванов И.И.', snils: '', height: 180, clothing_size: '52', shoe_size: '43' },
+  { legal_entity: testLe.short_name || '', card_number: 'СИЗ-001', fio: 'Кузнецов А.С.', snils: '', height: 182, clothing_size: '50-52', shoe_size: '43' },
+];
+const cardPreview = generatePpeCardsPreview(
+  ppeCardPreviewRows,
+  storage.listLegalEntities({ pageSize: 1000 }).items,
+  storage.getEmployeesRaw(),
+  existingCardsPpe,
+  'add'
+);
+assert.equal(cardPreview.results.length, 3);
+assert.equal(cardPreview.results[0].action, 'add');
+assert.equal(cardPreview.results[1].action, 'reject');
+assert.ok(cardPreview.results[1].errors.some(e => e.includes('не найдено в базе')));
+// Row 2 is duplicate card number СИЗ-001 for testLe -> in add mode it is skipped
+assert.equal(cardPreview.results[2].action, 'skip');
+assert.ok(cardPreview.results[2].warnings.some(w => w.includes('уже существует')));
+
+// Referential integrity checks for PPE
+// Step 13: Corrupt position_id in norm
+const rawNorms = storage.getPpeNormsRaw();
+const savedNormPos = rawNorms[0].position_id;
+rawNorms[0].position_id = 'ghost-pos-norm';
+storage.savePpeNormsRaw(rawNorms);
+const brokenNorm = storage.verifyDataIntegrity();
+assert.equal(brokenNorm.valid, false);
+assert.ok(brokenNorm.errors.some(e => e.includes('Норма выдачи СИЗ') && e.includes('несуществующую должность')));
+rawNorms[0].position_id = savedNormPos;
+storage.savePpeNormsRaw(rawNorms);
+assert.equal(storage.verifyDataIntegrity().valid, true);
+
+// Step 14: Corrupt employee_id in card
+const rawPpeCardsSet = storage.getPpeCardsRaw();
+const savedCardEmp = rawPpeCardsSet[0].employee_id;
+rawPpeCardsSet[0].employee_id = 'ghost-emp-card';
+storage.savePpeCardsRaw(rawPpeCardsSet);
+const brokenCard = storage.verifyDataIntegrity();
+assert.equal(brokenCard.valid, false);
+assert.ok(brokenCard.errors.some(e => e.includes('Личная карточка СИЗ') && e.includes('несуществующего работника')));
+rawPpeCardsSet[0].employee_id = savedCardEmp;
+storage.savePpeCardsRaw(rawPpeCardsSet);
+assert.equal(storage.verifyDataIntegrity().valid, true);
+
+// Step 15: Corrupt ppe_card_id in issuance
+const rawIssuances = storage.getPpeIssuancesRaw();
+const savedIssCard = rawIssuances[0].ppe_card_id;
+rawIssuances[0].ppe_card_id = 'ghost-card-iss';
+storage.savePpeIssuancesRaw(rawIssuances);
+const brokenIss = storage.verifyDataIntegrity();
+assert.equal(brokenIss.valid, false);
+assert.ok(brokenIss.errors.some(e => e.includes('Запись выдачи СИЗ') && e.includes('несуществующую карточку СИЗ')));
+rawIssuances[0].ppe_card_id = savedIssCard;
+storage.savePpeIssuancesRaw(rawIssuances);
+assert.equal(storage.verifyDataIntegrity().valid, true);
+
+// Module toggle: disable PPE blocks creation of norms/cards/issuances, data preserved
+setModuleState('ppe', false);
+assert.equal(storage.isModuleEnabled('ppe'), false);
+assert.throws(
+  () =>
+    storage.createPpeNorm({
+      legal_entity_id: testLe.id,
+      position_id: testPos.id,
+      ppe_type: 'clothing',
+      ppe_name: 'Халат',
+      quantity_per_period: 1,
+      period_months: 12,
+      unit: 'шт.',
+    }),
+  /Модуль «СИЗ» отключён/
+);
+assert.throws(
+  () =>
+    storage.createPpeCard({
+      card_number: 'BLOCKED-PPE',
+      legal_entity_id: testLe.id,
+      employee_id: testEmp.employee.id,
+    }),
+  /Модуль «СИЗ» отключён/
+);
+assert.throws(
+  () =>
+    storage.createPpeIssuance({
+      ppe_card_id: ppeCard1.id,
+      ppe_name: 'Фартук',
+      ppe_type: 'clothing',
+      issue_date: '2024-05-01',
+      quantity: 1,
+      unit: 'шт.',
+      wear_period_months: 12,
+    }),
+  /Модуль «СИЗ» отключён/
+);
+assert.ok(storage.getPpeNormsRaw().length >= 2); // data preserved
+assert.ok(storage.getPpeCardsRaw().length >= 2); // data preserved
+assert.ok(storage.getPpeIssuancesRaw().length >= 2); // data preserved
+setModuleState('ppe', true);
+assert.equal(storage.isModuleEnabled('ppe'), true);
+
+// Backup manifest includes PPE counts and body; restore round-trip preserves PPE data
+const backupStage9 = JSON.parse(storage.createBackup('test-stage9'));
+assert.ok(backupStage9.counts.ppe_norms >= 2);
+assert.ok(backupStage9.counts.ppe_cards >= 2);
+assert.ok(backupStage9.counts.ppe_issuances >= 2);
+assert.ok(Array.isArray(backupStage9.data.ppe_norms) && backupStage9.data.ppe_norms.length >= 2);
+assert.ok(Array.isArray(backupStage9.data.ppe_cards) && backupStage9.data.ppe_cards.length >= 2);
+assert.ok(Array.isArray(backupStage9.data.ppe_issuances) && backupStage9.data.ppe_issuances.length >= 2);
+
+// Add temporary PPE card and norm, then restore -> temporary items gone, valid items remain, integrity valid
+storage.createPpeNorm({
+  legal_entity_id: testLe.id,
+  position_id: testPos.id,
+  ppe_type: 'other',
+  ppe_name: 'НОРМА-TEMP',
+  quantity_per_period: 1,
+  period_months: 1,
+  unit: 'шт.',
+});
+assert.ok(storage.getPpeNormsRaw().some(n => n.ppe_name === 'НОРМА-TEMP'));
+const restoreReport9 = storage.restoreFromBackup(JSON.stringify(backupStage9));
+assert.equal(restoreReport9.valid, true);
+assert.equal(storage.getPpeNormsRaw().some(n => n.ppe_name === 'НОРМА-TEMP'), false);
+assert.ok(storage.getPpeNormsRaw().some(n => n.id === norm1.id));
+assert.ok(storage.getPpeCardsRaw().some(c => c.id === ppeCard1.id));
+assert.ok(storage.getPpeIssuancesRaw().some(i => i.id === issuance1.id));
+assert.equal(storage.verifyDataIntegrity().valid, true);
+assert.equal(storage.isModuleEnabled('ppe'), true);
+
+console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–9 УСПЕШНО ПРОЙДЕНЫ (27/27)!');
+
 
 

@@ -31,6 +31,13 @@ import {
   MedicalImportPreviewData,
   MEDICAL_EXAM_TYPE_LABELS_RU,
   MEDICAL_CONCLUSION_LABELS_RU,
+  PpeNormItem,
+  PpeCard,
+  PpeIssuanceRecord,
+  PpeCategory,
+  PPE_CATEGORY_LABELS_RU,
+  PpeImportRowResult,
+  PpeImportPreviewData,
 } from '../types';
 import {
   validateInn,
@@ -1386,8 +1393,16 @@ export function generateMedicalPreview(
         const needle = ciCompare(fioQuery);
         matched = leEmployees.filter(e => {
           const fio = `${e.last_name} ${e.first_name} ${e.middle_name || ''}`.trim();
-          const fioShort = `${e.last_name} ${e.first_name.charAt(0)}${e.middle_name ? '.' + e.middle_name.charAt(0) : ''}`.trim();
-          return ciCompare(fio) === needle || ciCompare(fioShort) === needle;
+          const f1 = e.first_name ? e.first_name.charAt(0) : '';
+          const m1 = e.middle_name ? e.middle_name.charAt(0) : '';
+          const shortVariants = [
+            `${e.last_name} ${f1}.${m1 ? m1 + '.' : ''}`.trim(),
+            `${e.last_name} ${f1}. ${m1 ? m1 + '.' : ''}`.trim(),
+            `${e.last_name} ${f1}.${m1 ? '.' + m1 : ''}`.trim(),
+            `${e.last_name} ${f1}${m1 ? '.' + m1 : ''}`.trim(),
+            `${e.last_name} ${f1}${m1 ? m1 : ''}`.trim(),
+          ];
+          return ciCompare(fio) === needle || shortVariants.some(v => ciCompare(v) === needle);
         });
       }
       if (matched.length === 0) {
@@ -2379,3 +2394,681 @@ export function generateEmployeePreview(
     summary,
   };
 }
+
+// =========================================================================
+// ЭТАП 9: СРЕДСТВА ИНДИВИДУАЛЬНОЙ ЗАЩИТЫ (СИЗ) — EXCEL ИМПОРТ И ЭКСПОРТ
+// =========================================================================
+
+export const PPE_NORMS_HEADERS = [
+  'Организация (ИНН или наименование)',
+  'Подразделение',
+  'Должность / профессия',
+  'Вид СИЗ',
+  'Наименование СИЗ',
+  'Защитные свойства / марка',
+  'Количество',
+  'Единица измерения',
+  'Срок носки (мес.)',
+  'Дежурное (Да/Нет)',
+  'Основание нормы (ЕТН / ЛНА)',
+  'Опасность / вредный фактор',
+];
+
+export const PPE_NORMS_ALIASES: Record<string, string> = {
+  'организация': 'legal_entity',
+  'юрлицо': 'legal_entity',
+  'инн': 'legal_entity',
+  'структурное подразделение': 'department',
+  'подразделение': 'department',
+  'отдел': 'department',
+  'цех': 'department',
+  'должность': 'position',
+  'профессия': 'position',
+  'должность / профессия': 'position',
+  'вид сиз': 'ppe_type',
+  'категория сиз': 'ppe_type',
+  'тип сиз': 'ppe_type',
+  'наименование сиз': 'ppe_name',
+  'наименование': 'ppe_name',
+  'сиз': 'ppe_name',
+  'защитные свойства': 'protection_properties',
+  'свойства': 'protection_properties',
+  'марка': 'protection_properties',
+  'защитные свойства / марка': 'protection_properties',
+  'количество': 'quantity',
+  'норма': 'quantity',
+  'количество на период': 'quantity',
+  'единица измерения': 'unit',
+  'ед. изм.': 'unit',
+  'ед.изм.': 'unit',
+  'срок носки': 'period_months',
+  'срок носки (мес.)': 'period_months',
+  'периодичность (мес.)': 'period_months',
+  'период': 'period_months',
+  'дежурное': 'is_duty',
+  'дежурное (да/нет)': 'is_duty',
+  'дежурный': 'is_duty',
+  'основание нормы': 'norm_basis',
+  'основание нормы (етн / лна)': 'norm_basis',
+  'етн': 'norm_basis',
+  'пункт етн': 'norm_basis',
+  'опасность / вредный фактор': 'hazard_or_factor',
+  'опасность': 'hazard_or_factor',
+  'фактор': 'hazard_or_factor',
+};
+
+export function exportPpeNormsToXLSX(
+  norms: PpeNormItem[],
+  leMap: Map<string, LegalEntity>,
+  posMap: Map<string, Position>,
+  deptMap: Map<string, Department>,
+  filename = 'ppe_norms.xlsx'
+): void {
+  const rows: any[][] = [PPE_NORMS_HEADERS];
+  for (const n of norms) {
+    const le = leMap.get(n.legal_entity_id);
+    const pos = posMap.get(n.position_id);
+    const dept = n.department_id ? deptMap.get(n.department_id) : undefined;
+    rows.push([
+      sanitizeCell(le?.short_name || le?.full_name || n.legal_entity_id),
+      sanitizeCell(dept?.name || ''),
+      sanitizeCell(pos?.name || n.position_id),
+      sanitizeCell(PPE_CATEGORY_LABELS_RU[n.ppe_type] || n.ppe_type),
+      sanitizeCell(n.ppe_name),
+      sanitizeCell(n.protection_properties || ''),
+      n.quantity_per_period,
+      sanitizeCell(n.unit),
+      n.period_months,
+      n.is_duty ? 'Да' : 'Нет',
+      sanitizeCell(n.norm_basis || ''),
+      sanitizeCell(n.hazard_or_factor || ''),
+    ]);
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = PPE_NORMS_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 16) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Нормы СИЗ (ЕТН)');
+  XLSX.writeFile(wb, filename);
+}
+
+export function exportPpeNormsToCSV(
+  norms: PpeNormItem[],
+  leMap: Map<string, LegalEntity>,
+  posMap: Map<string, Position>,
+  deptMap: Map<string, Department>,
+  filename = 'ppe_norms.csv'
+): void {
+  const lines: string[] = [];
+  lines.push(PPE_NORMS_HEADERS.map(h => `"${h.replace(/"/g, '""')}"`).join(';'));
+  for (const n of norms) {
+    const le = leMap.get(n.legal_entity_id);
+    const pos = posMap.get(n.position_id);
+    const dept = n.department_id ? deptMap.get(n.department_id) : undefined;
+    const row = [
+      le?.short_name || le?.full_name || n.legal_entity_id,
+      dept?.name || '',
+      pos?.name || n.position_id,
+      PPE_CATEGORY_LABELS_RU[n.ppe_type] || n.ppe_type,
+      n.ppe_name,
+      n.protection_properties || '',
+      String(n.quantity_per_period),
+      n.unit,
+      String(n.period_months),
+      n.is_duty ? 'Да' : 'Нет',
+      n.norm_basis || '',
+      n.hazard_or_factor || '',
+    ];
+    lines.push(row.map(cell => `"${sanitizeCell(cell).replace(/"/g, '""')}"`).join(';'));
+  }
+  const bom = '\uFEFF';
+  const blob = new Blob([bom + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function downloadPpeNormsTemplate(): void {
+  const rows: any[][] = [
+    PPE_NORMS_HEADERS,
+    [
+      'ООО «Пример»',
+      'Производственный отдел',
+      'Электрогазосварщик',
+      'Специальная одежда',
+      'Костюм для сварщика из огнестойких материалов',
+      'Тр, Тит',
+      1,
+      'компл.',
+      12,
+      'Нет',
+      'Приказ 767н, Прил. 1, п. 5.12',
+      'Повышенная температура, искры и брызги расплавленного металла',
+    ],
+    [
+      'ООО «Пример»',
+      'Производственный отдел',
+      'Электрогазосварщик',
+      'Средства защиты глаз и лица',
+      'Щиток защитный лицевой с автоматическим светофильтром',
+      'УФ, ИК, В',
+      1,
+      'шт.',
+      24,
+      'Нет',
+      'Приказ 767н, Прил. 1, п. 5.14',
+      'Оптическое излучение сварочной дуги',
+    ],
+    [
+      'ООО «Пример»',
+      'Складское хозяйство',
+      'Кладовщик',
+      'Средства защиты головы',
+      'Каска защитная',
+      'Мун',
+      1,
+      'шт.',
+      0,
+      'Да',
+      'Приказ 766н, п. 32 (дежурные СИЗ)',
+      'Падение предметов с высоты при погрузке',
+    ],
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = PPE_NORMS_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 18) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Шаблон норм СИЗ');
+  XLSX.writeFile(wb, 'template_ppe_norms.xlsx');
+}
+
+export function mapPpeNormsHeaders(headers: string[]): Record<string, string> {
+  const mapping: Record<string, string> = {};
+  for (const h of headers) {
+    const clean = h.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (PPE_NORMS_ALIASES[clean]) {
+      mapping[h] = PPE_NORMS_ALIASES[clean];
+    }
+  }
+  return mapping;
+}
+
+export function generatePpeNormsPreview(
+  rows: Record<string, any>[],
+  les: LegalEntity[],
+  depts: Department[],
+  positions: Position[],
+  existingNorms: PpeNormItem[],
+  mode: 'add' | 'update'
+): PpeImportPreviewData {
+  const results: PpeImportRowResult[] = [];
+
+  rows.forEach((row, idx) => {
+    const res: PpeImportRowResult = {
+      row: idx + 2,
+      action: 'skip',
+      title: '',
+      errors: [],
+      warnings: [],
+      changes: [],
+      data: {},
+    };
+
+    const leQuery = normalizeText(row.legal_entity);
+    const deptQuery = normalizeText(row.department);
+    const posQuery = normalizeText(row.position);
+    const ppeName = normalizeText(row.ppe_name);
+    const ppeTypeRaw = normalizeText(row.ppe_type);
+    const qtyRaw = row.quantity;
+    const unitRaw = normalizeText(row.unit);
+    const periodRaw = row.period_months;
+    const isDutyRaw = normalizeText(row.is_duty);
+
+    res.title = ppeName ? `${ppeName} (${posQuery || 'должность не указана'})` : `Строка ${idx + 2}`;
+
+    if (!leQuery) res.errors.push('Не указано юридическое лицо (ИНН или наименование).');
+    if (!posQuery) res.errors.push('Не указана должность / профессия.');
+    if (!ppeName) res.errors.push('Не указано наименование СИЗ.');
+
+    const qty = Number(qtyRaw);
+    if (isNaN(qty) || qty <= 0) {
+      res.errors.push('Количество должно быть положительным числом больше 0.');
+    }
+    const period = periodRaw !== undefined && periodRaw !== null && periodRaw !== '' ? Number(periodRaw) : 12;
+    if (isNaN(period) || period < 0) {
+      res.errors.push('Срок носки должен быть неотрицательным числом месяцев (0 — до износа).');
+    }
+
+    const unit = unitRaw || 'шт.';
+    const isDuty = ['да', 'true', '1', 'дежурное', 'дежурный'].includes((isDutyRaw || '').toLowerCase());
+
+    // Определение категории СИЗ
+    let ppeCategory: PpeCategory = 'clothing';
+    if (ppeTypeRaw) {
+      const pCat = ppeTypeRaw.toLowerCase();
+      if (pCat.includes('обув')) ppeCategory = 'footwear';
+      else if (pCat.includes('рук') || pCat.includes('перчат') || pCat.includes('рукавиц')) ppeCategory = 'hands';
+      else if (pCat.includes('голов') || pCat.includes('каск')) ppeCategory = 'head';
+      else if (pCat.includes('глаз') || pCat.includes('лиц') || pCat.includes('очк') || pCat.includes('щиток')) ppeCategory = 'eyes_face';
+      else if (pCat.includes('дыхан') || pCat.includes('респират') || pCat.includes('противогаз')) ppeCategory = 'respiratory';
+      else if (pCat.includes('слух') || pCat.includes('наушник') || pCat.includes('беруш')) ppeCategory = 'hearing';
+      else if (pCat.includes('паден') || pCat.includes('высот') || pCat.includes('привяз')) ppeCategory = 'fall_protection';
+      else if (pCat.includes('смыв') || pCat.includes('дерматолог') || pCat.includes('крем')) ppeCategory = 'dermatological';
+      else if (pCat.includes('одежд') || pCat.includes('костюм') || pCat.includes('халат')) ppeCategory = 'clothing';
+      else ppeCategory = 'other';
+    }
+
+    res.data = {
+      ppe_name: ppeName,
+      ppe_type: ppeCategory,
+      protection_properties: normalizeText(row.protection_properties),
+      quantity_per_period: qty,
+      unit,
+      period_months: period,
+      is_duty: isDuty,
+      norm_basis: normalizeText(row.norm_basis),
+      hazard_or_factor: normalizeText(row.hazard_or_factor),
+    };
+
+    // Сопоставление юридического лица
+    let targetLe: LegalEntity | undefined;
+    if (leQuery) {
+      targetLe = les.find(
+        l =>
+          l.status === 'active' &&
+          (l.inn === leQuery ||
+            ciCompare(l.full_name) === ciCompare(leQuery) ||
+            ciCompare(l.short_name || '') === ciCompare(leQuery))
+      );
+      if (!targetLe) {
+        res.errors.push(`Юридическое лицо «${leQuery}» не найдено в базе.`);
+      } else {
+        res.data.legal_entity_id = targetLe.id;
+      }
+    }
+
+    // Сопоставление должности
+    let targetPos: Position | undefined;
+    if (posQuery) {
+      const posNorm = posQuery.toLowerCase().replace(/\s+/g, ' ').trim();
+      targetPos = positions.find(p => p.normalized_name === posNorm && p.status === 'active');
+      if (!targetPos) {
+        res.warnings.push(`Должность «${posQuery}» отсутствует в справочнике — будет создана автоматически.`);
+      } else {
+        res.data.position_id = targetPos.id;
+      }
+    }
+
+    // Сопоставление подразделения
+    if (targetLe && deptQuery) {
+      const targetDept = depts.find(
+        d =>
+          d.legal_entity_id === targetLe!.id &&
+          d.status === 'active' &&
+          ciCompare(d.name) === ciCompare(deptQuery)
+      );
+      if (!targetDept) {
+        res.warnings.push(`Подразделение «${deptQuery}» не найдено — будет создано автоматически.`);
+      } else {
+        res.data.department_id = targetDept.id;
+      }
+    }
+
+    if (res.errors.length > 0) {
+      res.action = 'reject';
+      results.push(res);
+      return;
+    }
+
+    if (targetLe) {
+      // Идентификация нормы: юрлицо + должность + наименование СИЗ + признак дежурного
+      const existingMatch = existingNorms.find(
+        n =>
+          n.status === 'active' &&
+          n.legal_entity_id === targetLe!.id &&
+          (targetPos ? n.position_id === targetPos.id : false) &&
+          ciCompare(n.ppe_name) === ciCompare(ppeName) &&
+          n.is_duty === isDuty
+      );
+
+      if (existingMatch) {
+        if (mode === 'update') {
+          res.action = 'update';
+          res.changes.push(`Норма «${ppeName}» найдена для должности. Параметры выдачи будут обновлены.`);
+        } else {
+          res.action = 'skip';
+          res.warnings.push(`Норма «${ppeName}» уже существует для данной должности — строка будет пропущена.`);
+        }
+      } else {
+        res.action = 'add';
+      }
+    }
+
+    results.push(res);
+  });
+
+  const summary = {
+    total: results.length,
+    add: results.filter(r => r.action === 'add').length,
+    update: results.filter(r => r.action === 'update').length,
+    skip: results.filter(r => r.action === 'skip').length,
+    reject: results.filter(r => r.action === 'reject').length,
+  };
+
+  return { results, structure_errors: [], summary };
+}
+
+// --- Личные карточки СИЗ (Приказ Минтруда 766н) ---
+
+export const PPE_CARDS_HEADERS = [
+  'Организация (ИНН или наименование)',
+  'Номер карточки СИЗ',
+  'ФИО работника',
+  'СНИЛС',
+  'Рост (см)',
+  'Размер одежды',
+  'Размер обуви',
+  'Размер головного убора',
+  'Размер противогаза/респиратора',
+  'Размер перчаток',
+];
+
+export const PPE_CARDS_ALIASES: Record<string, string> = {
+  'организация': 'legal_entity',
+  'юрлицо': 'legal_entity',
+  'инн': 'legal_entity',
+  'номер карточки сиз': 'card_number',
+  'номер карточки': 'card_number',
+  'номер карты': 'card_number',
+  'номер сиз': 'card_number',
+  'номер': 'card_number',
+  'фио работника': 'fio',
+  'фио': 'fio',
+  'работник': 'fio',
+  'снилс': 'snils',
+  'рост (см)': 'height',
+  'рост': 'height',
+  'размер одежды': 'clothing_size',
+  'одежда': 'clothing_size',
+  'размер обуви': 'shoe_size',
+  'обувь': 'shoe_size',
+  'размер головного убора': 'headwear_size',
+  'головной убор': 'headwear_size',
+  'каска': 'headwear_size',
+  'размер противогаза/респиратора': 'gasmask_size',
+  'респиратор': 'gasmask_size',
+  'противогаз': 'gasmask_size',
+  'размер перчаток': 'gloves_size',
+  'перчатки': 'gloves_size',
+  'рукавицы': 'gloves_size',
+};
+
+export function exportPpeCardsToXLSX(
+  cards: PpeCard[],
+  leMap: Map<string, LegalEntity>,
+  empMap: Map<string, Employee>,
+  filename = 'ppe_cards.xlsx'
+): void {
+  const rows: any[][] = [PPE_CARDS_HEADERS];
+  for (const c of cards) {
+    const le = leMap.get(c.legal_entity_id);
+    const emp = empMap.get(c.employee_id);
+    const fio = emp ? `${emp.last_name} ${emp.first_name} ${emp.middle_name || ''}`.trim() : c.employee_id;
+    rows.push([
+      sanitizeCell(le?.short_name || le?.full_name || c.legal_entity_id),
+      sanitizeCell(c.card_number),
+      sanitizeCell(fio),
+      sanitizeCell(emp?.snils || ''),
+      c.height || '',
+      sanitizeCell(c.clothing_size || ''),
+      sanitizeCell(c.shoe_size || ''),
+      sanitizeCell(c.headwear_size || ''),
+      sanitizeCell(c.gasmask_size || ''),
+      sanitizeCell(c.gloves_size || ''),
+    ]);
+  }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = PPE_CARDS_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 16) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Личные карточки СИЗ');
+  XLSX.writeFile(wb, filename);
+}
+
+export function exportPpeCardsToCSV(
+  cards: PpeCard[],
+  leMap: Map<string, LegalEntity>,
+  empMap: Map<string, Employee>,
+  filename = 'ppe_cards.csv'
+): void {
+  const lines: string[] = [];
+  lines.push(PPE_CARDS_HEADERS.map(h => `"${h.replace(/"/g, '""')}"`).join(';'));
+  for (const c of cards) {
+    const le = leMap.get(c.legal_entity_id);
+    const emp = empMap.get(c.employee_id);
+    const fio = emp ? `${emp.last_name} ${emp.first_name} ${emp.middle_name || ''}`.trim() : c.employee_id;
+    const row = [
+      le?.short_name || le?.full_name || c.legal_entity_id,
+      c.card_number,
+      fio,
+      emp?.snils || '',
+      c.height ? String(c.height) : '',
+      c.clothing_size || '',
+      c.shoe_size || '',
+      c.headwear_size || '',
+      c.gasmask_size || '',
+      c.gloves_size || '',
+    ];
+    lines.push(row.map(cell => `"${sanitizeCell(cell).replace(/"/g, '""')}"`).join(';'));
+  }
+  const bom = '\uFEFF';
+  const blob = new Blob([bom + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function downloadPpeCardsTemplate(): void {
+  const rows: any[][] = [
+    PPE_CARDS_HEADERS,
+    [
+      'ООО «Пример»',
+      'СИЗ-001',
+      'Иванов Иван Иванович',
+      '112-233-445 95',
+      176,
+      '48-50 / 170-176',
+      '42',
+      '58',
+      '2',
+      '9 (L)',
+    ],
+    [
+      'ООО «Пример»',
+      'СИЗ-002',
+      'Петров Пётр Сергеевич',
+      '223-344-556 06',
+      182,
+      '52-54 / 182-188',
+      '44',
+      '60',
+      '3',
+      '10 (XL)',
+    ],
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = PPE_CARDS_HEADERS.map(h => ({ wch: Math.max(h.length + 4, 18) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Шаблон карточек СИЗ');
+  XLSX.writeFile(wb, 'template_ppe_cards.xlsx');
+}
+
+export function mapPpeCardsHeaders(headers: string[]): Record<string, string> {
+  const mapping: Record<string, string> = {};
+  for (const h of headers) {
+    const clean = h.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (PPE_CARDS_ALIASES[clean]) {
+      mapping[h] = PPE_CARDS_ALIASES[clean];
+    }
+  }
+  return mapping;
+}
+
+export function generatePpeCardsPreview(
+  rows: Record<string, any>[],
+  les: LegalEntity[],
+  employees: Employee[],
+  existingCards: PpeCard[],
+  mode: 'add' | 'update'
+): PpeImportPreviewData {
+  const results: PpeImportRowResult[] = [];
+
+  rows.forEach((row, idx) => {
+    const res: PpeImportRowResult = {
+      row: idx + 2,
+      action: 'skip',
+      title: '',
+      errors: [],
+      warnings: [],
+      changes: [],
+      data: {},
+    };
+
+    const leQuery = normalizeText(row.legal_entity);
+    const cardNumber = normalizeText(row.card_number);
+    const fioQuery = normalizeText(row.fio);
+    const snilsQuery = row.snils ? normalizeSnils(row.snils) : '';
+
+    res.title = cardNumber ? `Карточка № ${cardNumber}` : `Строка ${idx + 2}`;
+
+    if (!leQuery) res.errors.push('Не указано юридическое лицо (ИНН или наименование).');
+    if (!cardNumber) res.errors.push('Не указан номер личной карточки СИЗ.');
+    if (!fioQuery && !snilsQuery) res.errors.push('Не указан работник (ФИО или СНИЛС).');
+
+    const heightVal = row.height ? Number(row.height) : null;
+    if (heightVal !== null && (isNaN(heightVal) || heightVal < 100 || heightVal > 250)) {
+      res.warnings.push(`Указан необычный рост работника: ${heightVal} см.`);
+    }
+
+    res.data = {
+      card_number: cardNumber,
+      height: heightVal,
+      clothing_size: normalizeText(row.clothing_size),
+      shoe_size: normalizeText(row.shoe_size),
+      headwear_size: normalizeText(row.headwear_size),
+      gasmask_size: normalizeText(row.gasmask_size),
+      gloves_size: normalizeText(row.gloves_size),
+    };
+
+    // Сопоставление юридического лица
+    let targetLe: LegalEntity | undefined;
+    if (leQuery) {
+      targetLe = les.find(
+        l =>
+          l.status === 'active' &&
+          (l.inn === leQuery ||
+            ciCompare(l.full_name) === ciCompare(leQuery) ||
+            ciCompare(l.short_name || '') === ciCompare(leQuery))
+      );
+      if (!targetLe) {
+        res.errors.push(`Юридическое лицо «${leQuery}» не найдено в базе.`);
+      } else {
+        res.data.legal_entity_id = targetLe.id;
+      }
+    }
+
+    // Сопоставление работника
+    if (targetLe && (fioQuery || snilsQuery)) {
+      const leEmployees = employees.filter(e => e.status === 'active' && e.legal_entity_id === targetLe!.id);
+      let matched: Employee[] = [];
+      if (snilsQuery) {
+        matched = leEmployees.filter(e => normalizeSnils(e.snils || '') === snilsQuery);
+      }
+      if (matched.length === 0 && fioQuery) {
+        const needle = ciCompare(fioQuery);
+        matched = leEmployees.filter(e => {
+          const fio = `${e.last_name} ${e.first_name} ${e.middle_name || ''}`.trim();
+          const f1 = e.first_name ? e.first_name.charAt(0) : '';
+          const m1 = e.middle_name ? e.middle_name.charAt(0) : '';
+          const shortVariants = [
+            `${e.last_name} ${f1}.${m1 ? m1 + '.' : ''}`.trim(),
+            `${e.last_name} ${f1}. ${m1 ? m1 + '.' : ''}`.trim(),
+            `${e.last_name} ${f1}.${m1 ? '.' + m1 : ''}`.trim(),
+            `${e.last_name} ${f1}${m1 ? '.' + m1 : ''}`.trim(),
+            `${e.last_name} ${f1}${m1 ? m1 : ''}`.trim(),
+          ];
+          return ciCompare(fio) === needle || shortVariants.some(v => ciCompare(v) === needle);
+        });
+      }
+
+      if (matched.length === 0) {
+        res.errors.push(`Работник «${fioQuery || 'СНИЛС ' + snilsQuery}» не найден в организации.`);
+      } else {
+        if (matched.length > 1) {
+          res.warnings.push(`Найдено несколько работников с таким ФИО — выбран первый (${matched[0].last_name} ${matched[0].first_name}). Уточните импорт через СНИЛС.`);
+        }
+        res.data.employee_id = matched[0].id;
+        res.title = `Карточка № ${cardNumber} (${matched[0].last_name} ${matched[0].first_name})`;
+      }
+    }
+
+    if (res.errors.length > 0) {
+      res.action = 'reject';
+      results.push(res);
+      return;
+    }
+
+    if (targetLe) {
+      const existingMatch = existingCards.find(
+        c =>
+          c.status === 'active' &&
+          c.legal_entity_id === targetLe!.id &&
+          ciCompare(c.card_number) === ciCompare(cardNumber)
+      );
+
+      if (existingMatch) {
+        if (mode === 'update') {
+          res.action = 'update';
+          res.changes.push(`Карточка № ${cardNumber} найдена в организации. Размеры будут обновлены.`);
+        } else {
+          res.action = 'skip';
+          res.warnings.push(`Карточка № ${cardNumber} уже существует — строка будет пропущена.`);
+        }
+      } else {
+        // Проверка: нет ли у работника другой активной карточки
+        if (res.data.employee_id) {
+          const empCard = existingCards.find(
+            c => c.status === 'active' && c.employee_id === res.data.employee_id
+          );
+          if (empCard) {
+            res.action = 'reject';
+            res.errors.push(`У работника уже есть активная карточка СИЗ № «${empCard.card_number}».`);
+            results.push(res);
+            return;
+          }
+        }
+        res.action = 'add';
+      }
+    }
+
+    results.push(res);
+  });
+
+  const summary = {
+    total: results.length,
+    add: results.filter(r => r.action === 'add').length,
+    update: results.filter(r => r.action === 'update').length,
+    skip: results.filter(r => r.action === 'skip').length,
+    reject: results.filter(r => r.action === 'reject').length,
+  };
+
+  return { results, structure_errors: [], summary };
+}
+

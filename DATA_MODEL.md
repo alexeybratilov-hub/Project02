@@ -237,6 +237,117 @@
 
 Ключ `saot_opr_measures`. Поля: `id` (UUID PK), `opr_card_id` (FK → opr_cards), `hazard_id` (ссылка на опасность внутри карты), `measure_title` (обяз.), `deadline` (date), `responsible_person`, `status` (`planned` | `in_progress` | `completed`), `cost_estimate`, `comment`, `created_at`, `updated_at`.
 
+### 1.18. `medical_cards` — карты медосмотров (Этап 8, Приказ Минздрава 29н)
+
+Реализовано в `src/types.ts` (`MedicalExaminationCard`, `MedicalExamType`, `MedicalConclusion`) и `src/services/storage.ts` (ключ `saot_medical_cards`).
+
+| Поле | Тип | Обяз. | Примечание |
+|---|---|---|---|
+| id | UUID | да | PK (D-012) |
+| card_number | string(100) | да | номер карты («МЕД-001»), уникален в пределах юрлица |
+| legal_entity_id | UUID | да | FK → legal_entities |
+| employee_id | UUID | да | FK → employees (проверка: работник принадлежит юрлицу) |
+| contingent_record_id | UUID | нет | FK → contingent_records (проверка: контингент принадлежит юрлицу) |
+| sout_card_id | UUID | нет | FK → sout_cards (основание направления; проверка: карта СОУТ принадлежит юрлицу) |
+| exam_type | enum(`MedicalExamType`) | да | `preliminary` (предварительный), `periodic` (периодический), `pre_shift` (предсменный/предрейсовый) |
+| referral_date | date | нет | дата выдачи направления (не может быть в будущем) |
+| exam_date | date | нет | дата прохождения осмотра (не может быть раньше направления и не в будущем) |
+| next_due_date | date | нет | срок следующего осмотра (должен быть строго позже даты пройденного) |
+| clinic_name | string | нет | медицинская организация |
+| doctor_fio | string | нет | председатель врачебной комиссии / врач |
+| conclusion | enum(`MedicalConclusion`) | да | `fit` (годен), `fit_restrictions` (годен с ограничениями), `unfit` (не годен), `pending` (заключение не получено) |
+| conclusion_details | text | нет | подробности заключения, ограничения, выявленные противопоказания |
+| contraindications_found | boolean | нет | флаг наличия противопоказаний |
+| status | enum(`EntityStatus`) | да | active / archived (D-009) |
+| created_at / updated_at | datetime | да | |
+
+### 1.19. `psychiatric_exams` — акты психиатрического освидетельствования (Этап 8, Приказ Минздрава 342н)
+
+Реализовано в `src/types.ts` (`PsychiatricExamination`, `PsychiatricConclusion`) и `src/services/storage.ts` (ключ `saot_psychiatric_exams`).
+
+| Поле | Тип | Обяз. | Примечание |
+|---|---|---|---|
+| id | UUID | да | PK (D-012) |
+| legal_entity_id | UUID | да | FK → legal_entities |
+| employee_id | UUID | да | FK → employees (проверка: работник принадлежит юрлицу) |
+| exam_date | date | нет | дата освидетельствования (не в будущем) |
+| commission_members | string | нет | состав врачебной комиссии |
+| conclusion | enum(`PsychiatricConclusion`) | да | `fit` (пригоден), `unfit` (непригоден), `fit_restricted` (допущен с ограничениями) |
+| conclusion_protocol_number | string | нет | номер протокола / решения комиссии |
+| valid_until | date | нет | срок действия заключения (должен быть позже даты освидетельствования) |
+| basis | string | нет | вид деятельности / основание по Приказу 342н |
+| comment | text | нет | примечание |
+| status | enum(`EntityStatus`) | да | active / archived (D-009) |
+| created_at / updated_at | datetime | да | |
+
+### 1.20. Нормы выдачи СИЗ (`ppe_norms`)
+
+Нормы бесплатной выдачи спецодежды, спецобуви и других СИЗ на основе ЕТН (Приказ Минтруда России № 767н) или ЛНА организации.
+
+| Поле | Тип | Обязательно | Примечание |
+|---|---|---|---|
+| id | UUID | да | PK (D-012) |
+| legal_entity_id | UUID | да | FK → legal_entities |
+| department_id | UUID | нет | FK → departments (опциональная привязка к подразделению) |
+| position_id | UUID | да | FK → positions |
+| ppe_type | enum(`PpeCategory`) | да | `clothing`, `footwear`, `hands`, `head`, `eyes_face`, `respiratory`, `hearing`, `fall_protection`, `dermatological`, `other` |
+| ppe_name | string | да | наименование СИЗ |
+| protection_properties | string | нет | защитные свойства / маркировка (например, «ЗМи», «Мун») |
+| quantity_per_period | number | да | количество выдачи (строго > 0) |
+| period_months | number | да | срок носки в месяцах (0 = «до износа» для дежурных СИЗ) |
+| unit | string | да | единица измерения (шт., пар, компл., мл, туб) |
+| is_duty | boolean | да | признак дежурного СИЗ |
+| norm_basis | string | нет | пункт ЕТН (Приказ 767н) или нормативного документа |
+| hazard_or_factor | string | нет | идентифицированная опасность по 776н / вредный фактор |
+| status | enum(`EntityStatus`) | да | active / archived (D-009) |
+| created_at / updated_at | datetime | да | |
+
+### 1.21. Личные карточки учёта выдачи СИЗ (`ppe_cards`)
+
+Личные карточки работников в соответствии с Приложением № 2 к Приказу Минтруда России № 766н с фиксацией антропометрических размеров.
+
+| Поле | Тип | Обязательно | Примечание |
+|---|---|---|---|
+| id | UUID | да | PK (D-012) |
+| card_number | string | да | уникален в пределах юрлица («СИЗ-001») |
+| legal_entity_id | UUID | да | FK → legal_entities |
+| employee_id | UUID | да | FK → employees (один работник = одна активная карточка) |
+| height | number | нет | рост в см (например, 178) |
+| clothing_size | string | нет | размер одежды (например, «48-50 / 170-176») |
+| shoe_size | string | нет | размер обуви (например, «42») |
+| headwear_size | string | нет | размер головного убора (например, «58») |
+| gasmask_size | string | нет | размер противогаза / респиратора (например, «2») |
+| gloves_size | string | нет | размер перчаток (например, «9») |
+| status | enum(`EntityStatus`) | да | active / archived (D-009) |
+| created_at / updated_at | datetime | да | |
+
+### 1.22. Записи выдачи и сдачи СИЗ (`ppe_issuances`)
+
+Строки оборотной стороны личной карточки СИЗ (Приказ 766н): фактическая выдача, срок носки, плановая дата возврата, сдача/списание.
+
+| Поле | Тип | Обязательно | Примечание |
+|---|---|---|---|
+| id | UUID | да | PK (D-012) |
+| legal_entity_id | UUID | да | FK → legal_entities |
+| ppe_card_id | UUID | да | FK → ppe_cards |
+| employee_id | UUID | да | FK → employees |
+| ppe_norm_item_id | UUID | нет | FK → ppe_norms (ссылка на норму ЕТН, если выдано по норме) |
+| ppe_name | string | да | наименование выданного СИЗ |
+| ppe_type | enum(`PpeCategory`) | да | категория СИЗ |
+| protection_properties | string | нет | маркировка / защитные свойства |
+| model_or_article | string | нет | артикул / модель изделия |
+| issue_date | date | да | дата выдачи (не в будущем) |
+| quantity | number | да | количество (строго > 0) |
+| unit | string | да | единица измерения (шт., пар и т.д.) |
+| wear_period_months | number | да | срок носки (0 = до износа) |
+| due_return_date | date | нет | вычисляется автоматически: `issue_date + wear_period_months` |
+| actual_return_date | date | нет | дата фактической сдачи/возврата/списания (>= `issue_date`) |
+| return_reason | enum(`PpeReturnReason`) | нет | `wear`, `dismissal`, `unfit`, `transfer`, `other` |
+| return_reason_text | string | нет | дополнительное описание причины списания |
+| doc_number | string | нет | номер акта, ведомости или электронной подписи |
+| status | enum(`EntityStatus`) | да | active / archived (D-009) |
+| created_at / updated_at | datetime | да | |
+
 ## 2. Связи
 
 ```mermaid
@@ -265,9 +376,22 @@ erDiagram
     positions ||--o{ opr_cards : classifies
     contingent_records ||--o| opr_cards : relates
     opr_cards ||--o{ opr_measures : plans
+    legal_entities ||--o{ medical_cards : has
+    employees ||--o{ medical_cards : undergoes
+    contingent_records ||--o| medical_cards : links
+    sout_cards ||--o| medical_cards : grounds
+    legal_entities ||--o{ psychiatric_exams : has
+    employees ||--o{ psychiatric_exams : undergoes
+    legal_entities ||--o{ ppe_norms : establishes
+    departments ||--o{ ppe_norms : scopes
+    positions ||--o{ ppe_norms : standardizes
+    legal_entities ||--o{ ppe_cards : maintains
+    employees ||--o| ppe_cards : assigned
+    ppe_cards ||--o{ ppe_issuances : records
+    ppe_norms ||--o{ ppe_issuances : references
 ```
 
-Логическая цепочка: юридическое лицо → подразделение → должность и контингент → работники; карты СОУТ/ОПР привязаны к тройке (юрлицо, подразделение, должность) и опционально к записи контингента. Связи не обязательно один-к-одному. Проверка ссылочной целостности внешних ключей карт СОУТ/ОПР и мероприятий плана выполняется в `verifyDataIntegrity()` (`src/services/storage.ts`).
+Логическая цепочка: юридическое лицо → подразделение → должность и контингент → работники; карты СОУТ/ОПР привязаны к тройке (юрлицо, подразделение, должность) и опционально к записи контингента; карты медосмотров привязаны к работнику и юрлицу, с опциональной привязкой к карте СОУТ и контингенту; нормы СИЗ привязаны к юрлицу и должности; личные карточки СИЗ привязаны к работнику и юрлицу (одна активная карточка на работника), а записи выдачи — к личной карточке СИЗ с контролем сроков возврата. Проверка ссылочной целостности внешних ключей карт СОУТ/ОПР, мероприятий плана, карт медосмотров, актов психиатрического освидетельствования, норм и личных карточек СИЗ выполняется в `verifyDataIntegrity()` (`src/services/storage.ts`).
 
 ## 3. Правила архивирования
 

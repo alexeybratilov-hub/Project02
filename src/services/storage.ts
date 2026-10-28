@@ -30,6 +30,13 @@ import {
   PsychiatricExamination,
   PsychiatricConclusion,
   PSYCHIATRIC_CONCLUSION_LABELS_RU,
+  PpeCategory,
+  PPE_CATEGORY_LABELS_RU,
+  PpeNormItem,
+  PpeCard,
+  PpeReturnReason,
+  PPE_RETURN_REASON_LABELS_RU,
+  PpeIssuanceRecord,
 } from '../types';
 import {
   normalizeText,
@@ -63,6 +70,9 @@ const STORAGE_KEYS = {
   OPR_MEASURES: 'saot_opr_measures',
   MEDICAL_CARDS: 'saot_medical_cards',
   PSYCHIATRIC_EXAMS: 'saot_psychiatric_exams',
+  PPE_NORMS: 'saot_ppe_norms',
+  PPE_CARDS: 'saot_ppe_cards',
+  PPE_ISSUANCES: 'saot_ppe_issuances',
 };
 
 
@@ -187,6 +197,15 @@ const DEFAULT_MODULES: ModuleItem[] = [
     version: '1.0.0',
     enabled: false,
     requires_core: ['db', 'legal_entities', 'contingent', 'employees', 'sout'],
+  },
+  {
+    module_id: 'ppe',
+    title: 'Средства индивидуальной защиты (СИЗ)',
+    description:
+      'Учёт норм бесплатной выдачи СИЗ и смывающих средств (ЕТН, Приказы Минтруда 766н/767н), личные карточки учёта выдачи СИЗ, контроль сроков носки, периодичности выдачи и списания.',
+    version: '1.0.0',
+    enabled: false,
+    requires_core: ['db', 'legal_entities', 'contingent', 'employees'],
   },
 ];
 
@@ -3010,6 +3029,679 @@ class StorageService {
     return existing;
   }
 
+  // =========================================================================
+  // Модуль «СИЗ» (Этап 9, Приказы Минтруда РФ № 766н и № 767н ЕТН)
+  // =========================================================================
+
+  public getPpeNormsRaw(): PpeNormItem[] {
+    return loadFromStorage<PpeNormItem[]>(STORAGE_KEYS.PPE_NORMS, []);
+  }
+
+  public savePpeNormsRaw(items: PpeNormItem[]): void {
+    saveToStorage(STORAGE_KEYS.PPE_NORMS, items);
+  }
+
+  public getPpeCardsRaw(): PpeCard[] {
+    return loadFromStorage<PpeCard[]>(STORAGE_KEYS.PPE_CARDS, []);
+  }
+
+  public savePpeCardsRaw(items: PpeCard[]): void {
+    saveToStorage(STORAGE_KEYS.PPE_CARDS, items);
+  }
+
+  public getPpeIssuancesRaw(): PpeIssuanceRecord[] {
+    return loadFromStorage<PpeIssuanceRecord[]>(STORAGE_KEYS.PPE_ISSUANCES, []);
+  }
+
+  public savePpeIssuancesRaw(items: PpeIssuanceRecord[]): void {
+    saveToStorage(STORAGE_KEYS.PPE_ISSUANCES, items);
+  }
+
+  public static computeNextPpeDueDate(issueDate: string, wearPeriodMonths: number): string | null {
+    if (wearPeriodMonths <= 0) return null; // «до износа»
+    const parts = (issueDate || '').split('-');
+    if (parts.length !== 3) return null;
+    const y = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10) - 1;
+    const d = parseInt(parts[2], 10);
+    if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+    const dt = new Date(y, m + wearPeriodMonths, d);
+    if (isNaN(dt.getTime())) return null;
+    return dt.toISOString().slice(0, 10);
+  }
+
+  public static checkPpeOverdue(issuances: PpeIssuanceRecord[]): {
+    overdue: PpeIssuanceRecord[];
+    upcoming: PpeIssuanceRecord[];
+  } {
+    const today = nowISO().slice(0, 10);
+    const in30days = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    const overdue: PpeIssuanceRecord[] = [];
+    const upcoming: PpeIssuanceRecord[] = [];
+
+    for (const item of issuances) {
+      if (item.status === 'active' && !item.actual_return_date && item.due_return_date) {
+        if (item.due_return_date < today) {
+          overdue.push(item);
+        } else if (item.due_return_date <= in30days) {
+          upcoming.push(item);
+        }
+      }
+    }
+    return { overdue, upcoming };
+  }
+
+  // --- Нормы бесплатной выдачи СИЗ (ЕТН, Приказ Минтруда 767н) ---
+
+  public listPpeNorms(params?: {
+    search?: string;
+    legal_entity_id?: string;
+    department_id?: string;
+    position_id?: string;
+    ppe_type?: PpeCategory;
+    is_duty?: boolean;
+    status?: EntityStatus;
+    page?: number;
+    pageSize?: number;
+  }): { items: PpeNormItem[]; total: number } {
+    const all = this.getPpeNormsRaw();
+    const status = params?.status || 'active';
+    let filtered = all.filter(n => n.status === status);
+
+    if (params?.legal_entity_id) {
+      filtered = filtered.filter(n => n.legal_entity_id === params.legal_entity_id);
+    }
+    if (params?.department_id) {
+      filtered = filtered.filter(n => n.department_id === params.department_id);
+    }
+    if (params?.position_id) {
+      filtered = filtered.filter(n => n.position_id === params.position_id);
+    }
+    if (params?.ppe_type) {
+      filtered = filtered.filter(n => n.ppe_type === params.ppe_type);
+    }
+    if (params?.is_duty !== undefined) {
+      filtered = filtered.filter(n => n.is_duty === params.is_duty);
+    }
+
+    const term = (params?.search || '').trim().toLowerCase();
+    if (term) {
+      const positions = this.getPositionsRaw();
+      filtered = filtered.filter(n => {
+        const pos = positions.find(p => p.id === n.position_id);
+        return (
+          n.ppe_name.toLowerCase().includes(term) ||
+          (pos && pos.name.toLowerCase().includes(term)) ||
+          (n.norm_basis || '').toLowerCase().includes(term) ||
+          (n.hazard_or_factor || '').toLowerCase().includes(term) ||
+          (n.protection_properties || '').toLowerCase().includes(term)
+        );
+      });
+    }
+
+    filtered.sort((a, b) => ciCompare(a.ppe_name).localeCompare(ciCompare(b.ppe_name), 'ru'));
+
+    const total = filtered.length;
+    const page = Math.max(1, params?.page || 1);
+    const pageSize = params?.pageSize || 30;
+    const start = (page - 1) * pageSize;
+    return { items: filtered.slice(start, start + pageSize), total };
+  }
+
+  public getPpeNormById(id: string): PpeNormItem | null {
+    return this.getPpeNormsRaw().find(n => n.id === id) || null;
+  }
+
+  public createPpeNorm(data: {
+    legal_entity_id: string;
+    position_id: string;
+    department_id?: string | null;
+    ppe_type: PpeCategory;
+    ppe_name: string;
+    protection_properties?: string | null;
+    quantity_per_period: number;
+    period_months: number;
+    unit: string;
+    is_duty?: boolean;
+    norm_basis?: string | null;
+    hazard_or_factor?: string | null;
+  }): PpeNormItem {
+    if (!this.isModuleEnabled('ppe')) {
+      throw new Error('Модуль «СИЗ» отключён. Включите модуль в реестре модулей.');
+    }
+    if (!data.legal_entity_id) throw new Error('Юридическое лицо обязательно для заполнения.');
+    if (!this.getLegalEntityById(data.legal_entity_id)) {
+      throw new Error('Юридическое лицо не найдено.');
+    }
+    if (!data.position_id) throw new Error('Должность обязательна для заполнения.');
+    if (!this.getPositionById(data.position_id)) {
+      throw new Error('Должность не найдена в справочнике.');
+    }
+    if (data.department_id) {
+      const dept = this.getDepartmentById(data.department_id);
+      if (!dept || dept.legal_entity_id !== data.legal_entity_id) {
+        throw new Error('Подразделение не найдено или принадлежит другому юридическому лицу.');
+      }
+    }
+    const ppeName = normalizeText(data.ppe_name);
+    if (!ppeName) throw new Error('Наименование СИЗ обязательно для заполнения.');
+    const qty = Number(data.quantity_per_period);
+    if (isNaN(qty) || qty <= 0) {
+      throw new Error('Количество выдачи должно быть положительным числом больше 0.');
+    }
+    const period = Number(data.period_months);
+    if (isNaN(period) || period < 0) {
+      throw new Error('Период носки должен быть неотрицательным числом (0 — до износа).');
+    }
+    const unit = normalizeText(data.unit);
+    if (!unit) throw new Error('Единица измерения обязательна.');
+
+    const now = nowISO();
+    const item: PpeNormItem = {
+      id: generateUUID(),
+      legal_entity_id: data.legal_entity_id,
+      department_id: data.department_id || null,
+      position_id: data.position_id,
+      ppe_type: data.ppe_type || 'clothing',
+      ppe_name: ppeName,
+      protection_properties: normalizeText(data.protection_properties),
+      quantity_per_period: qty,
+      period_months: period,
+      unit,
+      is_duty: !!data.is_duty,
+      norm_basis: normalizeText(data.norm_basis),
+      hazard_or_factor: normalizeText(data.hazard_or_factor),
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    };
+
+    const all = this.getPpeNormsRaw();
+    all.push(item);
+    this.savePpeNormsRaw(all);
+    this.addAudit('ppe_norm', item.id, 'ppe_norm_create' as any, null, { ...item }, `Создание нормы СИЗ: «${item.ppe_name}»`);
+    return item;
+  }
+
+  public updatePpeNorm(id: string, data: Partial<PpeNormItem>): PpeNormItem {
+    if (!this.isModuleEnabled('ppe')) {
+      throw new Error('Модуль «СИЗ» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getPpeNormsRaw();
+    const index = all.findIndex(n => n.id === id);
+    if (index === -1) throw new Error('Норма выдачи СИЗ не найдена.');
+    const existing = all[index];
+    const before = { ...existing };
+
+    if (data.legal_entity_id && !this.getLegalEntityById(data.legal_entity_id)) {
+      throw new Error('Юридическое лицо не найдено.');
+    }
+    if (data.position_id && !this.getPositionById(data.position_id)) {
+      throw new Error('Должность не найдена в справочнике.');
+    }
+    const targetLeId = data.legal_entity_id || existing.legal_entity_id;
+    if (data.department_id) {
+      const dept = this.getDepartmentById(data.department_id);
+      if (!dept || dept.legal_entity_id !== targetLeId) {
+        throw new Error('Подразделение не принадлежит юридическому лицу.');
+      }
+    }
+
+    const updated: PpeNormItem = {
+      ...existing,
+      ...data,
+      legal_entity_id: targetLeId,
+      department_id: data.department_id !== undefined ? data.department_id : existing.department_id,
+      position_id: data.position_id || existing.position_id,
+      ppe_type: data.ppe_type || existing.ppe_type,
+      ppe_name: data.ppe_name !== undefined ? (normalizeText(data.ppe_name) || existing.ppe_name) : existing.ppe_name,
+      protection_properties:
+        data.protection_properties !== undefined ? normalizeText(data.protection_properties) : existing.protection_properties,
+      quantity_per_period:
+        data.quantity_per_period !== undefined ? Number(data.quantity_per_period) : existing.quantity_per_period,
+      period_months: data.period_months !== undefined ? Number(data.period_months) : existing.period_months,
+      unit: data.unit !== undefined ? (normalizeText(data.unit) || existing.unit) : existing.unit,
+      is_duty: data.is_duty !== undefined ? !!data.is_duty : existing.is_duty,
+      norm_basis: data.norm_basis !== undefined ? normalizeText(data.norm_basis) : existing.norm_basis,
+      hazard_or_factor:
+        data.hazard_or_factor !== undefined ? normalizeText(data.hazard_or_factor) : existing.hazard_or_factor,
+      updated_at: nowISO(),
+    };
+
+    all[index] = updated;
+    this.savePpeNormsRaw(all);
+    this.addAudit('ppe_norm', updated.id, 'ppe_norm_update' as any, before, { ...updated }, `Обновление нормы СИЗ: «${updated.ppe_name}»`);
+    return updated;
+  }
+
+  public archivePpeNorm(id: string): PpeNormItem {
+    if (!this.isModuleEnabled('ppe')) {
+      throw new Error('Модуль «СИЗ» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getPpeNormsRaw();
+    const index = all.findIndex(n => n.id === id);
+    if (index === -1) throw new Error('Норма выдачи СИЗ не найдена.');
+    const existing = all[index];
+    if (existing.status === 'archived') throw new Error('Норма СИЗ уже в архиве.');
+    const before = { ...existing };
+    existing.status = 'archived';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.savePpeNormsRaw(all);
+    this.addAudit('ppe_norm', existing.id, 'ppe_norm_archive' as any, before, { ...existing }, `Архивирование нормы СИЗ: «${existing.ppe_name}»`);
+    return existing;
+  }
+
+  public restorePpeNorm(id: string): PpeNormItem {
+    if (!this.isModuleEnabled('ppe')) {
+      throw new Error('Модуль «СИЗ» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getPpeNormsRaw();
+    const index = all.findIndex(n => n.id === id);
+    if (index === -1) throw new Error('Норма выдачи СИЗ не найдена.');
+    const existing = all[index];
+    if (existing.status === 'active') throw new Error('Норма СИЗ уже активна.');
+    const before = { ...existing };
+    existing.status = 'active';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.savePpeNormsRaw(all);
+    this.addAudit('ppe_norm', existing.id, 'ppe_norm_restore' as any, before, { ...existing }, `Восстановление нормы СИЗ: «${existing.ppe_name}»`);
+    return existing;
+  }
+
+  // --- Личные карточки учёта выдачи СИЗ (Приказ Минтруда 766н) ---
+
+  public listPpeCards(params?: {
+    search?: string;
+    legal_entity_id?: string;
+    employee_id?: string;
+    has_overdue?: boolean;
+    status?: EntityStatus;
+    page?: number;
+    pageSize?: number;
+  }): { items: PpeCard[]; total: number } {
+    const all = this.getPpeCardsRaw();
+    const status = params?.status || 'active';
+    let filtered = all.filter(c => c.status === status);
+
+    if (params?.legal_entity_id) {
+      filtered = filtered.filter(c => c.legal_entity_id === params.legal_entity_id);
+    }
+    if (params?.employee_id) {
+      filtered = filtered.filter(c => c.employee_id === params.employee_id);
+    }
+
+    if (params?.has_overdue) {
+      const today = nowISO().slice(0, 10);
+      const allIssuances = this.getPpeIssuancesRaw();
+      const overdueCardIds = new Set<string>();
+      for (const iss of allIssuances) {
+        if (iss.status === 'active' && !iss.actual_return_date && iss.due_return_date && iss.due_return_date < today) {
+          overdueCardIds.add(iss.ppe_card_id);
+        }
+      }
+      filtered = filtered.filter(c => overdueCardIds.has(c.id));
+    }
+
+    const term = (params?.search || '').trim().toLowerCase();
+    if (term) {
+      const employees = this.getEmployeesRaw();
+      filtered = filtered.filter(c => {
+        const emp = employees.find(e => e.id === c.employee_id);
+        const fio = emp ? `${emp.last_name} ${emp.first_name} ${emp.middle_name || ''}`.toLowerCase() : '';
+        const snils = emp?.snils?.toLowerCase() || '';
+        return c.card_number.toLowerCase().includes(term) || fio.includes(term) || snils.includes(term);
+      });
+    }
+
+    filtered.sort((a, b) => ciCompare(a.card_number).localeCompare(ciCompare(b.card_number), 'ru'));
+
+    const total = filtered.length;
+    const page = Math.max(1, params?.page || 1);
+    const pageSize = params?.pageSize || 30;
+    const start = (page - 1) * pageSize;
+    return { items: filtered.slice(start, start + pageSize), total };
+  }
+
+  public getPpeCardById(id: string): PpeCard | null {
+    return this.getPpeCardsRaw().find(c => c.id === id) || null;
+  }
+
+  public getPpeCardByEmployeeId(employeeId: string): PpeCard | null {
+    return this.getPpeCardsRaw().find(c => c.employee_id === employeeId && c.status === 'active') || null;
+  }
+
+  public createPpeCard(data: {
+    card_number: string;
+    legal_entity_id: string;
+    employee_id: string;
+    height?: number | null;
+    clothing_size?: string | null;
+    shoe_size?: string | null;
+    headwear_size?: string | null;
+    gasmask_size?: string | null;
+    gloves_size?: string | null;
+  }): PpeCard {
+    if (!this.isModuleEnabled('ppe')) {
+      throw new Error('Модуль «СИЗ» отключён. Включите модуль в реестре модулей.');
+    }
+    if (!data.legal_entity_id) throw new Error('Юридическое лицо обязательно для заполнения.');
+    if (!this.getLegalEntityById(data.legal_entity_id)) {
+      throw new Error('Юридическое лицо не найдено.');
+    }
+    if (!data.employee_id) throw new Error('Работник обязателен для заполнения.');
+    const emp = this.getEmployeeById(data.employee_id);
+    if (!emp) throw new Error('Работник не найден.');
+    if (emp.legal_entity_id !== data.legal_entity_id) {
+      throw new Error('Работник относится к другому юридическому лицу.');
+    }
+
+    const cardNumber = normalizeText(data.card_number);
+    if (!cardNumber) throw new Error('Номер карточки СИЗ обязателен.');
+
+    const all = this.getPpeCardsRaw();
+    const dupNumber = all.find(
+      c => c.status === 'active' && c.legal_entity_id === data.legal_entity_id && ciCompare(c.card_number) === ciCompare(cardNumber)
+    );
+    if (dupNumber) {
+      throw new Error(`Карточка СИЗ № «${cardNumber}» уже существует в данном юридическом лице.`);
+    }
+
+    const dupEmp = all.find(c => c.status === 'active' && c.employee_id === data.employee_id);
+    if (dupEmp) {
+      throw new Error(`У работника уже есть активная карточка СИЗ № «${dupEmp.card_number}».`);
+    }
+
+    const now = nowISO();
+    const item: PpeCard = {
+      id: generateUUID(),
+      card_number: cardNumber,
+      legal_entity_id: data.legal_entity_id,
+      employee_id: data.employee_id,
+      height: data.height !== undefined && data.height !== null ? Number(data.height) : null,
+      clothing_size: normalizeText(data.clothing_size),
+      shoe_size: normalizeText(data.shoe_size),
+      headwear_size: normalizeText(data.headwear_size),
+      gasmask_size: normalizeText(data.gasmask_size),
+      gloves_size: normalizeText(data.gloves_size),
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    };
+
+    all.push(item);
+    this.savePpeCardsRaw(all);
+    this.addAudit('ppe_card', item.id, 'ppe_card_create' as any, null, { ...item }, `Создание личной карточки СИЗ № ${item.card_number}`);
+    return item;
+  }
+
+  public updatePpeCard(id: string, data: Partial<PpeCard>): PpeCard {
+    if (!this.isModuleEnabled('ppe')) {
+      throw new Error('Модуль «СИЗ» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getPpeCardsRaw();
+    const index = all.findIndex(c => c.id === id);
+    if (index === -1) throw new Error('Карточка СИЗ не найдена.');
+    const existing = all[index];
+    const before = { ...existing };
+
+    const targetLeId = data.legal_entity_id || existing.legal_entity_id;
+    const cardNumber = data.card_number !== undefined ? (normalizeText(data.card_number) || existing.card_number) : existing.card_number;
+
+    if (cardNumber !== existing.card_number) {
+      const dup = all.find(
+        c => c.id !== id && c.status === 'active' && c.legal_entity_id === targetLeId && ciCompare(c.card_number) === ciCompare(cardNumber)
+      );
+      if (dup) {
+        throw new Error(`Карточка СИЗ № «${cardNumber}» уже существует в данном юридическом лице.`);
+      }
+    }
+
+    const updated: PpeCard = {
+      ...existing,
+      ...data,
+      card_number: cardNumber,
+      legal_entity_id: targetLeId,
+      employee_id: data.employee_id || existing.employee_id,
+      height: data.height !== undefined ? (data.height !== null ? Number(data.height) : null) : existing.height,
+      clothing_size: data.clothing_size !== undefined ? normalizeText(data.clothing_size) : existing.clothing_size,
+      shoe_size: data.shoe_size !== undefined ? normalizeText(data.shoe_size) : existing.shoe_size,
+      headwear_size: data.headwear_size !== undefined ? normalizeText(data.headwear_size) : existing.headwear_size,
+      gasmask_size: data.gasmask_size !== undefined ? normalizeText(data.gasmask_size) : existing.gasmask_size,
+      gloves_size: data.gloves_size !== undefined ? normalizeText(data.gloves_size) : existing.gloves_size,
+      updated_at: nowISO(),
+    };
+
+    all[index] = updated;
+    this.savePpeCardsRaw(all);
+    this.addAudit('ppe_card', updated.id, 'ppe_card_update' as any, before, { ...updated }, `Обновление личной карточки СИЗ № ${updated.card_number}`);
+    return updated;
+  }
+
+  public archivePpeCard(id: string): PpeCard {
+    if (!this.isModuleEnabled('ppe')) {
+      throw new Error('Модуль «СИЗ» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getPpeCardsRaw();
+    const index = all.findIndex(c => c.id === id);
+    if (index === -1) throw new Error('Карточка СИЗ не найдена.');
+    const existing = all[index];
+    if (existing.status === 'archived') throw new Error('Карточка СИЗ уже в архиве.');
+    const before = { ...existing };
+    existing.status = 'archived';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.savePpeCardsRaw(all);
+    this.addAudit('ppe_card', existing.id, 'ppe_card_archive' as any, before, { ...existing }, `Архивирование карточки СИЗ № ${existing.card_number}`);
+    return existing;
+  }
+
+  public restorePpeCard(id: string): PpeCard {
+    if (!this.isModuleEnabled('ppe')) {
+      throw new Error('Модуль «СИЗ» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getPpeCardsRaw();
+    const index = all.findIndex(c => c.id === id);
+    if (index === -1) throw new Error('Карточка СИЗ не найдена.');
+    const existing = all[index];
+    if (existing.status === 'active') throw new Error('Карточка СИЗ уже активна.');
+    const before = { ...existing };
+    existing.status = 'active';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.savePpeCardsRaw(all);
+    this.addAudit('ppe_card', existing.id, 'ppe_card_restore' as any, before, { ...existing }, `Восстановление карточки СИЗ № ${existing.card_number}`);
+    return existing;
+  }
+
+  // --- Записи выдачи и сдачи/возврата СИЗ в личную карточку ---
+
+  public listPpeIssuances(
+    cardId?: string,
+    params?: { overdue?: boolean; status?: EntityStatus }
+  ): PpeIssuanceRecord[] {
+    const all = this.getPpeIssuancesRaw();
+    const status = params?.status || 'active';
+    let filtered = all.filter(i => i.status === status);
+
+    if (cardId) {
+      filtered = filtered.filter(i => i.ppe_card_id === cardId);
+    }
+    if (params?.overdue) {
+      const today = nowISO().slice(0, 10);
+      filtered = filtered.filter(i => !i.actual_return_date && !!i.due_return_date && i.due_return_date < today);
+    }
+
+    filtered.sort((a, b) => (b.issue_date || '').localeCompare(a.issue_date || ''));
+    return filtered;
+  }
+
+  public getPpeIssuanceById(id: string): PpeIssuanceRecord | null {
+    return this.getPpeIssuancesRaw().find(i => i.id === id) || null;
+  }
+
+  public createPpeIssuance(data: {
+    ppe_card_id: string;
+    ppe_norm_item_id?: string | null;
+    ppe_name: string;
+    ppe_type: PpeCategory;
+    protection_properties?: string | null;
+    model_or_article?: string | null;
+    issue_date: string;
+    quantity: number;
+    unit: string;
+    wear_period_months: number;
+    doc_number?: string | null;
+  }): PpeIssuanceRecord {
+    if (!this.isModuleEnabled('ppe')) {
+      throw new Error('Модуль «СИЗ» отключён. Включите модуль в реестре модулей.');
+    }
+    const card = this.getPpeCardById(data.ppe_card_id);
+    if (!card) throw new Error('Личная карточка СИЗ не найдена.');
+
+    const ppeName = normalizeText(data.ppe_name);
+    if (!ppeName) throw new Error('Наименование выданного СИЗ обязательно.');
+    const qty = Number(data.quantity);
+    if (isNaN(qty) || qty <= 0) {
+      throw new Error('Количество выдачи должно быть положительным числом больше 0.');
+    }
+    const wearMonths = Number(data.wear_period_months);
+    if (isNaN(wearMonths) || wearMonths < 0) {
+      throw new Error('Срок носки должен быть неотрицательным числом (0 — до износа).');
+    }
+    const unit = normalizeText(data.unit);
+    if (!unit) throw new Error('Единица измерения обязательна.');
+    const issueDate = validateDateNotFuture(data.issue_date, 'Дата выдачи СИЗ') || nowISO().slice(0, 10);
+    const dueReturnDate = StorageService.computeNextPpeDueDate(issueDate, wearMonths);
+
+    const now = nowISO();
+    const issuance: PpeIssuanceRecord = {
+      id: generateUUID(),
+      legal_entity_id: card.legal_entity_id,
+      employee_id: card.employee_id,
+      ppe_card_id: card.id,
+      ppe_norm_item_id: data.ppe_norm_item_id || null,
+      ppe_name: ppeName,
+      ppe_type: data.ppe_type || 'clothing',
+      protection_properties: normalizeText(data.protection_properties),
+      model_or_article: normalizeText(data.model_or_article),
+      issue_date: issueDate,
+      quantity: qty,
+      unit,
+      wear_period_months: wearMonths,
+      due_return_date: dueReturnDate,
+      actual_return_date: null,
+      return_reason: null,
+      return_reason_text: null,
+      doc_number: normalizeText(data.doc_number),
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    };
+
+    const all = this.getPpeIssuancesRaw();
+    all.push(issuance);
+    this.savePpeIssuancesRaw(all);
+    this.addAudit('ppe_issuance', issuance.id, 'ppe_issue' as any, null, { ...issuance }, `Выдача СИЗ «${issuance.ppe_name}» (${qty} ${unit}) по карточке № ${card.card_number}`);
+    return issuance;
+  }
+
+  public returnPpeIssuance(
+    id: string,
+    data: {
+      actual_return_date: string;
+      return_reason: PpeReturnReason;
+      return_reason_text?: string | null;
+    }
+  ): PpeIssuanceRecord {
+    if (!this.isModuleEnabled('ppe')) {
+      throw new Error('Модуль «СИЗ» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getPpeIssuancesRaw();
+    const index = all.findIndex(i => i.id === id);
+    if (index === -1) throw new Error('Запись выдачи СИЗ не найдена.');
+    const existing = all[index];
+    const before = { ...existing };
+
+    const returnDate = validateDateNotFuture(data.actual_return_date, 'Дата сдачи/возврата СИЗ');
+    if (!returnDate) {
+      throw new Error('Укажите корректную дату сдачи СИЗ.');
+    }
+    if (returnDate < existing.issue_date) {
+      throw new Error('Дата сдачи СИЗ не может быть раньше даты выдачи.');
+    }
+    if (!data.return_reason || !PPE_RETURN_REASON_LABELS_RU[data.return_reason]) {
+      throw new Error('Укажите корректную причину сдачи/списания СИЗ.');
+    }
+
+    const updated: PpeIssuanceRecord = {
+      ...existing,
+      actual_return_date: returnDate,
+      return_reason: data.return_reason,
+      return_reason_text: normalizeText(data.return_reason_text),
+      updated_at: nowISO(),
+    };
+
+    all[index] = updated;
+    this.savePpeIssuancesRaw(all);
+    this.addAudit('ppe_issuance', updated.id, 'ppe_return' as any, before, { ...updated }, `Сдача/списание СИЗ «${updated.ppe_name}»: ${PPE_RETURN_REASON_LABELS_RU[data.return_reason]}`);
+    return updated;
+  }
+
+  public updatePpeIssuance(id: string, data: Partial<PpeIssuanceRecord>): PpeIssuanceRecord {
+    if (!this.isModuleEnabled('ppe')) {
+      throw new Error('Модуль «СИЗ» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getPpeIssuancesRaw();
+    const index = all.findIndex(i => i.id === id);
+    if (index === -1) throw new Error('Запись выдачи СИЗ не найдена.');
+    const existing = all[index];
+    const before = { ...existing };
+
+    const issueDate = data.issue_date !== undefined ? (validateDateNotFuture(data.issue_date, 'Дата выдачи СИЗ') || existing.issue_date) : existing.issue_date;
+    const wearMonths = data.wear_period_months !== undefined ? Number(data.wear_period_months) : existing.wear_period_months;
+    const dueReturnDate = StorageService.computeNextPpeDueDate(issueDate, wearMonths);
+
+    const updated: PpeIssuanceRecord = {
+      ...existing,
+      ...data,
+      ppe_name: data.ppe_name !== undefined ? (normalizeText(data.ppe_name) || existing.ppe_name) : existing.ppe_name,
+      protection_properties: data.protection_properties !== undefined ? normalizeText(data.protection_properties) : existing.protection_properties,
+      model_or_article: data.model_or_article !== undefined ? normalizeText(data.model_or_article) : existing.model_or_article,
+      issue_date: issueDate,
+      quantity: data.quantity !== undefined ? Number(data.quantity) : existing.quantity,
+      unit: data.unit !== undefined ? (normalizeText(data.unit) || existing.unit) : existing.unit,
+      wear_period_months: wearMonths,
+      due_return_date: dueReturnDate,
+      doc_number: data.doc_number !== undefined ? normalizeText(data.doc_number) : existing.doc_number,
+      updated_at: nowISO(),
+    };
+
+    all[index] = updated;
+    this.savePpeIssuancesRaw(all);
+    this.addAudit('ppe_issuance', updated.id, 'ppe_issuance_update' as any, before, { ...updated }, `Обновление записи выдачи СИЗ «${updated.ppe_name}»`);
+    return updated;
+  }
+
+  public archivePpeIssuance(id: string): PpeIssuanceRecord {
+    if (!this.isModuleEnabled('ppe')) {
+      throw new Error('Модуль «СИЗ» отключён. Включите модуль в реестре модулей.');
+    }
+    const all = this.getPpeIssuancesRaw();
+    const index = all.findIndex(i => i.id === id);
+    if (index === -1) throw new Error('Запись выдачи СИЗ не найдена.');
+    const existing = all[index];
+    if (existing.status === 'archived') throw new Error('Запись выдачи СИЗ уже в архиве.');
+    const before = { ...existing };
+    existing.status = 'archived';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.savePpeIssuancesRaw(all);
+    this.addAudit('ppe_issuance', existing.id, 'ppe_issuance_archive' as any, before, { ...existing }, `Архивирование записи выдачи СИЗ «${existing.ppe_name}»`);
+    return existing;
+  }
+
   // --- Backup & Restore ---
   public createBackup(label?: string): string {
     const manifest = {
@@ -3029,6 +3721,9 @@ class StorageService {
         opr_measures: this.getOprMeasuresRaw().length,
         medical_cards: this.getMedicalCardsRaw().length,
         psychiatric_exams: this.getPsychiatricExamsRaw().length,
+        ppe_norms: this.getPpeNormsRaw().length,
+        ppe_cards: this.getPpeCardsRaw().length,
+        ppe_issuances: this.getPpeIssuancesRaw().length,
         audit_logs: this.getAuditLogs().length,
       },
       data: {
@@ -3044,6 +3739,9 @@ class StorageService {
         opr_measures: this.getOprMeasuresRaw(),
         medical_cards: this.getMedicalCardsRaw(),
         psychiatric_exams: this.getPsychiatricExamsRaw(),
+        ppe_norms: this.getPpeNormsRaw(),
+        ppe_cards: this.getPpeCardsRaw(),
+        ppe_issuances: this.getPpeIssuancesRaw(),
         audit_logs: this.getAuditLogs(),
       },
     };
@@ -3122,6 +3820,15 @@ class StorageService {
     if (Array.isArray(parsed.data.psychiatric_exams)) {
       saveToStorage(STORAGE_KEYS.PSYCHIATRIC_EXAMS, parsed.data.psychiatric_exams);
     }
+    if (Array.isArray(parsed.data.ppe_norms)) {
+      saveToStorage(STORAGE_KEYS.PPE_NORMS, parsed.data.ppe_norms);
+    }
+    if (Array.isArray(parsed.data.ppe_cards)) {
+      saveToStorage(STORAGE_KEYS.PPE_CARDS, parsed.data.ppe_cards);
+    }
+    if (Array.isArray(parsed.data.ppe_issuances)) {
+      saveToStorage(STORAGE_KEYS.PPE_ISSUANCES, parsed.data.ppe_issuances);
+    }
     if (Array.isArray(parsed.data.audit_logs)) {
       this.saveAuditLogsRaw(parsed.data.audit_logs);
     }
@@ -3160,6 +3867,9 @@ class StorageService {
     const oprMeasures = this.getOprMeasuresRaw();
     const medicalCards = this.getMedicalCardsRaw();
     const psychExams = this.getPsychiatricExamsRaw();
+    const ppeNorms = this.getPpeNormsRaw();
+    const ppeCards = this.getPpeCardsRaw();
+    const ppeIssuances = this.getPpeIssuancesRaw();
     const logs = this.getAuditLogs();
 
     const errors: string[] = [];
@@ -3170,6 +3880,8 @@ class StorageService {
     const posMap = new Map(positions.map(p => [p.id, p]));
     const contMap = new Map(contingent.map(c => [c.id, c]));
     const empMap = new Map(employees.map(e => [e.id, e]));
+    const ppeCardMap = new Map(ppeCards.map(c => [c.id, c]));
+    const ppeNormMap = new Map(ppeNorms.map(n => [n.id, n]));
 
     // 1. Legal entities verification
     const activeInnKpp = new Set<string>();
@@ -3419,6 +4131,71 @@ class StorageService {
       }
     }
 
+    // 13. Нормы выдачи СИЗ verification (Stage 9, module 'ppe')
+    for (const n of ppeNorms) {
+      if (!n.legal_entity_id || !leMap.has(n.legal_entity_id)) {
+        errors.push(`Норма выдачи СИЗ (ID: ${n.id}) ссылается на несуществующее юридическое лицо (ID: ${n.legal_entity_id}).`);
+      }
+      if (!n.position_id || !posMap.has(n.position_id)) {
+        errors.push(`Норма выдачи СИЗ (ID: ${n.id}) ссылается на несуществующую должность (ID: ${n.position_id}).`);
+      }
+      if (n.department_id) {
+        const d = deptMap.get(n.department_id);
+        if (!d) {
+          errors.push(`Норма выдачи СИЗ (ID: ${n.id}) ссылается на несуществующее подразделение (ID: ${n.department_id}).`);
+        } else if (n.legal_entity_id && d.legal_entity_id !== n.legal_entity_id) {
+          errors.push(`Норма выдачи СИЗ (ID: ${n.id}) ссылается на подразделение другого юридического лица.`);
+        }
+      }
+      if (!n.ppe_name) {
+        errors.push(`Норма выдачи СИЗ (ID: ${n.id}) имеет пустое наименование СИЗ.`);
+      }
+      if (n.quantity_per_period <= 0) {
+        errors.push(`Норма выдачи СИЗ «${n.ppe_name}» (ID: ${n.id}) имеет неположительное количество.`);
+      }
+    }
+
+    // 14. Личные карточки СИЗ verification (Stage 9, module 'ppe')
+    const activeCardsByEmp = new Map<string, string>();
+    for (const c of ppeCards) {
+      if (!c.card_number) {
+        errors.push(`Личная карточка СИЗ (ID: ${c.id}) имеет пустой номер.`);
+      }
+      if (!c.legal_entity_id || !leMap.has(c.legal_entity_id)) {
+        errors.push(`Личная карточка СИЗ № «${c.card_number}» (ID: ${c.id}) ссылается на несуществующее юридическое лицо.`);
+      }
+      const emp = empMap.get(c.employee_id);
+      if (!emp) {
+        errors.push(`Личная карточка СИЗ № «${c.card_number}» (ID: ${c.id}) ссылается на несуществующего работника.`);
+      } else if (c.legal_entity_id && emp.legal_entity_id !== c.legal_entity_id) {
+        errors.push(`Личная карточка СИЗ № «${c.card_number}» (ID: ${c.id}): работник относится к другому юридическому лицу.`);
+      }
+      if (c.status === 'active') {
+        if (activeCardsByEmp.has(c.employee_id)) {
+          errors.push(`Работник (ID: ${c.employee_id}) имеет более одной активной карточки СИЗ.`);
+        } else {
+          activeCardsByEmp.set(c.employee_id, c.id);
+        }
+      }
+    }
+
+    // 15. Записи выдачи СИЗ verification (Stage 9, module 'ppe')
+    const today = nowISO().slice(0, 10);
+    for (const i of ppeIssuances) {
+      if (!i.ppe_card_id || !ppeCardMap.has(i.ppe_card_id)) {
+        errors.push(`Запись выдачи СИЗ (ID: ${i.id}) ссылается на несуществующую карточку СИЗ.`);
+      }
+      if (i.ppe_norm_item_id && !ppeNormMap.has(i.ppe_norm_item_id)) {
+        errors.push(`Запись выдачи СИЗ «${i.ppe_name}» (ID: ${i.id}) ссылается на несуществующую норму выдачи.`);
+      }
+      if (i.actual_return_date && i.actual_return_date < i.issue_date) {
+        errors.push(`Запись выдачи СИЗ «${i.ppe_name}» (ID: ${i.id}): дата возврата ${i.actual_return_date} раньше даты выдачи ${i.issue_date}.`);
+      }
+      if (i.status === 'active' && !i.actual_return_date && i.due_return_date && i.due_return_date < today) {
+        warnings.push(`СИЗ «${i.ppe_name}» (карточка ID: ${i.ppe_card_id}) просрочено к замене (срок: ${i.due_return_date}).`);
+      }
+    }
+
     return {
       valid: errors.length === 0,
       timestamp: nowISO(),
@@ -3437,6 +4214,9 @@ class StorageService {
         opr_measures: oprMeasures.length,
         medical_cards: medicalCards.length,
         psychiatric_exams: psychExams.length,
+        ppe_norms: ppeNorms.length,
+        ppe_cards: ppeCards.length,
+        ppe_issuances: ppeIssuances.length,
         audit_logs: logs.length,
       },
     };
