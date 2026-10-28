@@ -1,5 +1,5 @@
 import React from 'react';
-import { storage } from '../services/storage';
+import { storage, StorageService } from '../services/storage';
 
 interface DashboardProps {
   onNavigate: (view: string, id?: string) => void;
@@ -37,6 +37,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const ppeIssuances = ppeEnabled ? storage.getPpeIssuancesRaw() : [];
   const ppeOverdueCount = ppeIssuances.filter(
     i => i.status === 'active' && !i.actual_return_date && i.due_return_date && i.due_return_date < today
+  ).length;
+
+  const trainingEnabled = storage.isModuleEnabled('training');
+  const trainingProtocolsRaw = trainingEnabled ? storage.getTrainingProtocolsRaw() : [];
+  const trainingActiveProtocols = trainingProtocolsRaw.filter(p => p.status === 'active');
+  const trainingOverdueCount = trainingActiveProtocols.filter(
+    p => StorageService.checkTrainingValidity(p.next_check_date) === 'overdue'
+  ).length;
+  const trainingExpiringCount = trainingActiveProtocols.filter(
+    p => StorageService.checkTrainingValidity(p.next_check_date) === 'expiring'
   ).length;
 
   const widgets = [
@@ -109,6 +119,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
             caption: `карточек; просрочено замен СИЗ: ${ppeOverdueCount}`,
             empty_hint: 'Пока нет карточек СИЗ — создайте первую или загрузите нормы ЕТН.',
             onClick: () => onNavigate('ppe'),
+          },
+        ]
+      : []),
+    ...(trainingEnabled
+      ? [
+          {
+            id: 'training',
+            title: 'Обучение (2464)',
+            value: trainingActiveProtocols.length,
+            caption: `действующих протоколов; просрочено проверок: ${trainingOverdueCount}, истекает: ${trainingExpiringCount}`,
+            empty_hint: 'Пока нет протоколов проверки знаний — оформите первый или импортируйте программы обучения.',
+            onClick: () => onNavigate('training'),
           },
         ]
       : []),

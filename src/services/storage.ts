@@ -37,6 +37,16 @@ import {
   PpeReturnReason,
   PPE_RETURN_REASON_LABELS_RU,
   PpeIssuanceRecord,
+  TrainingProgram,
+  TrainingProgramCategory,
+  TRAINING_PROGRAM_CATEGORY_LABELS_RU,
+  TRAINING_DEFAULT_RECURRING_MONTHS,
+  TrainingAssignment,
+  TrainingBriefingType,
+  TrainingProtocolItem,
+  TrainingProtocolMember,
+  TrainingKnowledgeResult,
+  TrainingValidityStatus,
 } from '../types';
 import {
   normalizeText,
@@ -73,6 +83,9 @@ const STORAGE_KEYS = {
   PPE_NORMS: 'saot_ppe_norms',
   PPE_CARDS: 'saot_ppe_cards',
   PPE_ISSUANCES: 'saot_ppe_issuances',
+  TRAINING_PROGRAMS: 'saot_training_programs',
+  TRAINING_ASSIGNMENTS: 'saot_training_assignments',
+  TRAINING_PROTOCOLS: 'saot_training_protocols',
 };
 
 
@@ -203,6 +216,15 @@ const DEFAULT_MODULES: ModuleItem[] = [
     title: 'Средства индивидуальной защиты (СИЗ)',
     description:
       'Учёт норм бесплатной выдачи СИЗ и смывающих средств (ЕТН, Приказы Минтруда 766н/767н), личные карточки учёта выдачи СИЗ, контроль сроков носки, периодичности выдачи и списания.',
+    version: '1.0.0',
+    enabled: false,
+    requires_core: ['db', 'legal_entities', 'contingent', 'employees'],
+  },
+  {
+    module_id: 'training',
+    title: 'Обучение по охране труда и проверка знаний',
+    description:
+      'Программы обучения А/Б/В, первая помощь, применение СИЗ, инструктажи (Постановление Правительства РФ 24.12.2021 № 2464): протоколы проверки знаний комиссией, удостоверения, контроль периодичности (3 года / 1 год для работ повышенной опасности), реестр обученных лиц.',
     version: '1.0.0',
     enabled: false,
     requires_core: ['db', 'legal_entities', 'contingent', 'employees'],
@@ -3702,6 +3724,606 @@ class StorageService {
     return existing;
   }
 
+  // ==================== ЭТАП 10: ОБУЧЕНИЕ ПО ОХРАНЕ ТРУДА И ПРОВЕРКА ЗНАНИЙ (ПОСТАНОВЛЕНИЕ РФ № 2464) ====================
+
+  private ensureTrainingModule(): void {
+    if (!this.isModuleEnabled('training')) {
+      throw new Error('Модуль «Обучение по охране труда» отключён. Включите модуль в реестре модулей.');
+    }
+  }
+
+  public getTrainingProgramsRaw(): TrainingProgram[] {
+    return loadFromStorage<TrainingProgram[]>(STORAGE_KEYS.TRAINING_PROGRAMS, []);
+  }
+
+  public saveTrainingProgramsRaw(items: TrainingProgram[]): void {
+    saveToStorage(STORAGE_KEYS.TRAINING_PROGRAMS, items);
+  }
+
+  public getTrainingAssignmentsRaw(): TrainingAssignment[] {
+    return loadFromStorage<TrainingAssignment[]>(STORAGE_KEYS.TRAINING_ASSIGNMENTS, []);
+  }
+
+  public saveTrainingAssignmentsRaw(items: TrainingAssignment[]): void {
+    saveToStorage(STORAGE_KEYS.TRAINING_ASSIGNMENTS, items);
+  }
+
+  public getTrainingProtocolsRaw(): TrainingProtocolItem[] {
+    return loadFromStorage<TrainingProtocolItem[]>(STORAGE_KEYS.TRAINING_PROTOCOLS, []);
+  }
+
+  public saveTrainingProtocolsRaw(items: TrainingProtocolItem[]): void {
+    saveToStorage(STORAGE_KEYS.TRAINING_PROTOCOLS, items);
+  }
+
+  // Прибавление месяцев к дате YYYY-MM-DD (аналог computeNextPpeDueDate)
+  public static addMonthsToDate(dateStr: string, months: number): string | null {
+    const parts = (dateStr || '').split('-');
+    if (parts.length !== 3) return null;
+    const y = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10) - 1;
+    const d = parseInt(parts[2], 10);
+    if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+    const dt = new Date(y, m + months, d);
+    if (isNaN(dt.getTime())) return null;
+    return dt.toISOString().slice(0, 10);
+  }
+
+  // Авторасчёт срока следующей проверки знаний по программе обучения
+  public static computeNextCheckDate(sessionDate: string, recurringMonths?: number | null): string | null {
+    if (!recurringMonths || recurringMonths <= 0) return null;
+    return StorageService.addMonthsToDate(sessionDate, recurringMonths);
+  }
+
+  // Статус действия результатов обучения: valid / expiring (30 дней) / overdue
+  public static checkTrainingValidity(nextCheckDate?: string | null): TrainingValidityStatus {
+    if (!nextCheckDate) return 'none';
+    const today = nowISO().slice(0, 10);
+    if (nextCheckDate < today) return 'overdue';
+    const in30days = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    if (nextCheckDate <= in30days) return 'expiring';
+    return 'valid';
+  }
+
+  // --- Программы обучения (Постановление 2464: программы А, Б, В, первая помощь, СИЗ, инструктажи) ---
+
+  public listTrainingPrograms(params?: {
+    search?: string;
+    legal_entity_id?: string;
+    category?: TrainingProgramCategory;
+    status?: EntityStatus;
+    page?: number;
+    pageSize?: number;
+  }): { items: TrainingProgram[]; total: number } {
+    const all = this.getTrainingProgramsRaw();
+    const status = params?.status || 'active';
+    let filtered = all.filter(p => p.status === status);
+    if (params?.legal_entity_id) {
+      filtered = filtered.filter(p => p.legal_entity_id === params.legal_entity_id);
+    }
+    if (params?.category) {
+      filtered = filtered.filter(p => p.category === params.category);
+    }
+    const term = (params?.search || '').trim().toLowerCase();
+    if (term) {
+      filtered = filtered.filter(p =>
+        p.name.toLowerCase().includes(term) ||
+        (p.positions || '').toLowerCase().includes(term) ||
+        (p.basis || '').toLowerCase().includes(term)
+      );
+    }
+    filtered.sort((a, b) => ciCompare(a.name).localeCompare(ciCompare(b.name), 'ru'));
+    const total = filtered.length;
+    const page = Math.max(1, params?.page || 1);
+    const pageSize = params?.pageSize || 30;
+    const start = (page - 1) * pageSize;
+    return { items: filtered.slice(start, start + pageSize), total };
+  }
+
+  public getTrainingProgramById(id: string): TrainingProgram | null {
+    return this.getTrainingProgramsRaw().find(p => p.id === id) || null;
+  }
+
+  public createTrainingProgram(data: {
+    legal_entity_id: string;
+    name: string;
+    category: TrainingProgramCategory;
+    hours: number;
+    recurring_months?: number | null;
+    positions?: string | null;
+    basis?: string | null;
+  }): TrainingProgram {
+    this.ensureTrainingModule();
+    if (!data.legal_entity_id) throw new Error('Юридическое лицо обязательно для заполнения.');
+    if (!this.getLegalEntityById(data.legal_entity_id)) {
+      throw new Error('Юридическое лицо не найдено.');
+    }
+    const name = normalizeText(data.name);
+    if (!name) throw new Error('Наименование программы обучения обязательно для заполнения.');
+    if (!data.category || !TRAINING_PROGRAM_CATEGORY_LABELS_RU[data.category]) {
+      throw new Error('Недопустимая категория программы обучения.');
+    }
+    const hours = Number(data.hours);
+    if (isNaN(hours) || hours <= 0) throw new Error('Трудоемкость программы должна быть положительным числом часов.');
+    // Минимальная трудоемкость по Порядку № 2464: А/Б — не менее 16 ч., первая помощь и СИЗ — не менее 8 ч.
+    if ((data.category === 'program_a' || data.category === 'program_b') && hours < 16) {
+      throw new Error('Программы А и Б должны иметь трудоемкость не менее 16 часов (Постановление 2464).');
+    }
+    if ((data.category === 'first_aid' || data.category === 'ppe_use') && hours < 8) {
+      throw new Error('Обучение первой помощи и применению СИЗ — не менее 8 часов (Постановление 2464).');
+    }
+    let recurring = data.recurring_months;
+    if (recurring === undefined || recurring === null) {
+      recurring = TRAINING_DEFAULT_RECURRING_MONTHS[data.category] ?? null;
+    }
+    const rec = Number(recurring);
+    if (recurring !== null && (isNaN(rec) || rec < 0)) {
+      throw new Error('Периодичность обучения должна быть неотрицательным числом месяцев (null — без периодичности).');
+    }
+
+    const now = nowISO();
+    const item: TrainingProgram = {
+      id: generateUUID(),
+      legal_entity_id: data.legal_entity_id,
+      name,
+      category: data.category,
+      hours,
+      recurring_months: recurring === null ? null : rec,
+      positions: normalizeText(data.positions),
+      basis: normalizeText(data.basis),
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    };
+    const all = this.getTrainingProgramsRaw();
+    all.push(item);
+    this.saveTrainingProgramsRaw(all);
+    this.addAudit('training_program', item.id, 'training_program_create' as any, null, { ...item }, `Создание программы обучения: «${item.name}»`);
+    return item;
+  }
+
+  public updateTrainingProgram(id: string, data: Partial<TrainingProgram>): TrainingProgram {
+    this.ensureTrainingModule();
+    const all = this.getTrainingProgramsRaw();
+    const index = all.findIndex(p => p.id === id);
+    if (index === -1) throw new Error('Программа обучения не найдена.');
+    const existing = all[index];
+    const before = { ...existing };
+
+    if (data.legal_entity_id && !this.getLegalEntityById(data.legal_entity_id)) {
+      throw new Error('Юридическое лицо не найдено.');
+    }
+    if (data.category && !TRAINING_PROGRAM_CATEGORY_LABELS_RU[data.category]) {
+      throw new Error('Недопустимая категория программы обучения.');
+    }
+    if (data.hours !== undefined) {
+      const hours = Number(data.hours);
+      if (isNaN(hours) || hours <= 0) throw new Error('Трудоемкость программы должна быть положительным числом часов.');
+      const cat = data.category || existing.category;
+      if ((cat === 'program_a' || cat === 'program_b') && hours < 16) {
+        throw new Error('Программы А и Б должны иметь трудоемкость не менее 16 часов (Постановление 2464).');
+      }
+      if ((cat === 'first_aid' || cat === 'ppe_use') && hours < 8) {
+        throw new Error('Обучение первой помощи и применению СИЗ — не менее 8 часов (Постановление 2464).');
+      }
+    }
+
+    const updated: TrainingProgram = {
+      ...existing,
+      ...data,
+      name: data.name !== undefined ? (normalizeText(data.name) || existing.name) : existing.name,
+      positions: data.positions !== undefined ? normalizeText(data.positions) : existing.positions,
+      basis: data.basis !== undefined ? normalizeText(data.basis) : existing.basis,
+      updated_at: nowISO(),
+    };
+    all[index] = updated;
+    this.saveTrainingProgramsRaw(all);
+    this.addAudit('training_program', id, 'training_program_update' as any, before, { ...updated }, `Редактирование программы обучения: «${updated.name}»`);
+    return updated;
+  }
+
+  public archiveTrainingProgram(id: string): TrainingProgram {
+    this.ensureTrainingModule();
+    const all = this.getTrainingProgramsRaw();
+    const index = all.findIndex(p => p.id === id);
+    if (index === -1) throw new Error('Программа обучения не найдена.');
+    const existing = all[index];
+    if (existing.status === 'archived') throw new Error('Программа обучения уже в архиве.');
+    const activeProtocols = this.getTrainingProtocolsRaw().some(pr => pr.training_program_id === id && pr.status === 'active');
+    const activeAssignments = this.getTrainingAssignmentsRaw().some(a => a.training_program_id === id && a.status === 'active');
+    if (activeProtocols || activeAssignments) {
+      throw new Error('Нельзя архивировать программу: есть активные протоколы проверки знаний или назначения обучения.');
+    }
+    const before = { ...existing };
+    existing.status = 'archived';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveTrainingProgramsRaw(all);
+    this.addAudit('training_program', id, 'training_program_archive' as any, before, { ...existing }, `Архивирование программы обучения: «${existing.name}»`);
+    return existing;
+  }
+
+  public restoreTrainingProgram(id: string): TrainingProgram {
+    this.ensureTrainingModule();
+    const all = this.getTrainingProgramsRaw();
+    const index = all.findIndex(p => p.id === id);
+    if (index === -1) throw new Error('Программа обучения не найдена.');
+    const existing = all[index];
+    if (existing.status === 'active') throw new Error('Программа обучения уже активна.');
+    const before = { ...existing };
+    existing.status = 'active';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveTrainingProgramsRaw(all);
+    this.addAudit('training_program', id, 'training_program_restore' as any, before, { ...existing }, `Восстановление программы обучения: «${existing.name}»`);
+    return existing;
+  }
+
+  // --- Назначения на обучение / инструктажи ---
+
+  public listTrainingAssignments(params?: {
+    legal_entity_id?: string;
+    employee_id?: string;
+    training_program_id?: string;
+    briefing_type?: TrainingBriefingType;
+    status?: EntityStatus;
+    page?: number;
+    pageSize?: number;
+  }): { items: TrainingAssignment[]; total: number } {
+    const all = this.getTrainingAssignmentsRaw();
+    const status = params?.status || 'active';
+    let filtered = all.filter(a => a.status === status);
+    if (params?.legal_entity_id) filtered = filtered.filter(a => a.legal_entity_id === params.legal_entity_id);
+    if (params?.employee_id) filtered = filtered.filter(a => a.employee_id === params.employee_id);
+    if (params?.training_program_id) filtered = filtered.filter(a => a.training_program_id === params.training_program_id);
+    if (params?.briefing_type) filtered = filtered.filter(a => a.briefing_type === params.briefing_type);
+    filtered.sort((a, b) => (b.assignment_date || '').localeCompare(a.assignment_date || ''));
+    const total = filtered.length;
+    const page = Math.max(1, params?.page || 1);
+    const pageSize = params?.pageSize || 30;
+    const start = (page - 1) * pageSize;
+    return { items: filtered.slice(start, start + pageSize), total };
+  }
+
+  public getTrainingAssignmentById(id: string): TrainingAssignment | null {
+    return this.getTrainingAssignmentsRaw().find(a => a.id === id) || null;
+  }
+
+  public createTrainingAssignment(data: {
+    legal_entity_id: string;
+    employee_id: string;
+    training_program_id: string;
+    briefing_type?: TrainingBriefingType | null;
+    assignment_date: string;
+    planned_due_date?: string | null;
+    notes?: string | null;
+  }): TrainingAssignment {
+    this.ensureTrainingModule();
+    if (!data.legal_entity_id || !this.getLegalEntityById(data.legal_entity_id)) {
+      throw new Error('Юридическое лицо не найдено.');
+    }
+    const emp = this.getEmployeeById(data.employee_id);
+    if (!emp) throw new Error('Работник не найден.');
+    if (emp.legal_entity_id !== data.legal_entity_id) throw new Error('Работник относится к другому юридическому лицу.');
+    const program = this.getTrainingProgramById(data.training_program_id);
+    if (!program) throw new Error('Программа обучения не найдена.');
+    if (program.legal_entity_id !== data.legal_entity_id) throw new Error('Программа обучения относится к другому юридическому лицу.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data.assignment_date || '')) {
+      throw new Error('Укажите корректную дату назначения обучения (YYYY-MM-DD).');
+    }
+    if (data.planned_due_date && !/^\d{4}-\d{2}-\d{2}$/.test(data.planned_due_date)) {
+      throw new Error('Укажите корректную плановую дату прохождения обучения.');
+    }
+    if (data.planned_due_date && data.planned_due_date < data.assignment_date) {
+      throw new Error('Плановая дата прохождения не может быть раньше даты назначения.');
+    }
+
+    const now = nowISO();
+    const item: TrainingAssignment = {
+      id: generateUUID(),
+      legal_entity_id: data.legal_entity_id,
+      employee_id: data.employee_id,
+      training_program_id: data.training_program_id,
+      briefing_type: data.briefing_type || null,
+      assignment_date: data.assignment_date,
+      planned_due_date: data.planned_due_date || null,
+      completed_protocol_id: null,
+      notes: normalizeText(data.notes),
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    };
+    const all = this.getTrainingAssignmentsRaw();
+    all.push(item);
+    this.saveTrainingAssignmentsRaw(all);
+    this.addAudit('training_assignment', item.id, 'training_assignment_create' as any, null, { ...item }, `Назначение обучения работнику (ID: ${data.employee_id})`);
+    return item;
+  }
+
+  public updateTrainingAssignment(id: string, data: Partial<TrainingAssignment>): TrainingAssignment {
+    this.ensureTrainingModule();
+    const all = this.getTrainingAssignmentsRaw();
+    const index = all.findIndex(a => a.id === id);
+    if (index === -1) throw new Error('Назначение на обучение не найдено.');
+    const existing = all[index];
+    const before = { ...existing };
+    const updated: TrainingAssignment = {
+      ...existing,
+      ...data,
+      notes: data.notes !== undefined ? normalizeText(data.notes) : existing.notes,
+      updated_at: nowISO(),
+    };
+    all[index] = updated;
+    this.saveTrainingAssignmentsRaw(all);
+    this.addAudit('training_assignment', id, 'training_assignment_update' as any, before, { ...updated }, 'Редактирование назначения на обучение');
+    return updated;
+  }
+
+  public archiveTrainingAssignment(id: string): TrainingAssignment {
+    this.ensureTrainingModule();
+    const all = this.getTrainingAssignmentsRaw();
+    const index = all.findIndex(a => a.id === id);
+    if (index === -1) throw new Error('Назначение на обучение не найдено.');
+    const existing = all[index];
+    if (existing.status === 'archived') throw new Error('Назначение на обучение уже в архиве.');
+    const before = { ...existing };
+    existing.status = 'archived';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveTrainingAssignmentsRaw(all);
+    this.addAudit('training_assignment', id, 'training_assignment_archive' as any, before, { ...existing }, 'Архивирование назначения на обучение');
+    return existing;
+  }
+
+  // --- Протоколы проверки знаний требований охраны труда (комиссия, Приложение к Порядку 2464) ---
+
+  public listTrainingProtocols(params?: {
+    search?: string;
+    legal_entity_id?: string;
+    employee_id?: string;
+    training_program_id?: string;
+    result?: TrainingKnowledgeResult;
+    validity?: TrainingValidityStatus;
+    status?: EntityStatus;
+    page?: number;
+    pageSize?: number;
+  }): { items: TrainingProtocolItem[]; total: number } {
+    const all = this.getTrainingProtocolsRaw();
+    const status = params?.status || 'active';
+    let filtered = all.filter(p => p.status === status);
+    if (params?.legal_entity_id) filtered = filtered.filter(p => p.legal_entity_id === params.legal_entity_id);
+    if (params?.employee_id) filtered = filtered.filter(p => p.employee_id === params.employee_id);
+    if (params?.training_program_id) filtered = filtered.filter(p => p.training_program_id === params.training_program_id);
+    if (params?.result) filtered = filtered.filter(p => p.result === params.result);
+    if (params?.validity) {
+      filtered = filtered.filter(p => StorageService.checkTrainingValidity(p.next_check_date) === params.validity);
+    }
+    const term = (params?.search || '').trim().toLowerCase();
+    if (term) {
+      const employees = this.getEmployeesRaw();
+      filtered = filtered.filter(p => {
+        const emp = employees.find(e => e.id === p.employee_id);
+        const empName = emp ? `${emp.last_name} ${emp.first_name}` : '';
+        return (
+          p.protocol_number.toLowerCase().includes(term) ||
+          empName.toLowerCase().includes(term) ||
+          (p.certificate_number || '').toLowerCase().includes(term) ||
+          (p.registry_entry_number || '').toLowerCase().includes(term)
+        );
+      });
+    }
+    filtered.sort((a, b) => (b.session_date || '').localeCompare(a.session_date || ''));
+    const total = filtered.length;
+    const page = Math.max(1, params?.page || 1);
+    const pageSize = params?.pageSize || 30;
+    const start = (page - 1) * pageSize;
+    return { items: filtered.slice(start, start + pageSize), total };
+  }
+
+  public getTrainingProtocolById(id: string): TrainingProtocolItem | null {
+    return this.getTrainingProtocolsRaw().find(p => p.id === id) || null;
+  }
+
+  public createTrainingProtocol(data: {
+    protocol_number: string;
+    legal_entity_id: string;
+    training_program_id: string;
+    session_date: string;
+    chairperson: TrainingProtocolMember;
+    members: TrainingProtocolMember[];
+    employee_id: string;
+    result: TrainingKnowledgeResult;
+    issues_certificate?: boolean;
+    certificate_number?: string | null;
+    registry_entry_number?: string | null;
+    next_check_date?: string | null;
+    notes?: string | null;
+  }): TrainingProtocolItem {
+    this.ensureTrainingModule();
+    if (!data.legal_entity_id || !this.getLegalEntityById(data.legal_entity_id)) {
+      throw new Error('Юридическое лицо не найдено.');
+    }
+    const protocolNumber = normalizeText(data.protocol_number);
+    if (!protocolNumber) throw new Error('Номер протокола обязателен для заполнения.');
+    const program = this.getTrainingProgramById(data.training_program_id);
+    if (!program) throw new Error('Программа обучения не найдена.');
+    if (program.legal_entity_id !== data.legal_entity_id) {
+      throw new Error('Программа обучения относится к другому юридическому лицу.');
+    }
+    const emp = this.getEmployeeById(data.employee_id);
+    if (!emp) throw new Error('Работник не найден.');
+    if (emp.legal_entity_id !== data.legal_entity_id) throw new Error('Работник относится к другому юридическому лицу.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data.session_date || '')) {
+      throw new Error('Укажите корректную дату заседания комиссии (YYYY-MM-DD).');
+    }
+    if (data.session_date > nowISO().slice(0, 10)) {
+      throw new Error('Дата заседания комиссии не может быть в будущем.');
+    }
+    if (data.result !== 'passed' && data.result !== 'failed') {
+      throw new Error('Недопустимый результат проверки знаний (удовлетворительно / неудовлетворительно).');
+    }
+    const chairperson = data.chairperson;
+    if (!chairperson || !normalizeText(chairperson.position) || !normalizeText(chairperson.last_name)) {
+      throw new Error('Укажите председателя комиссии (должность и фамилия).');
+    }
+    const members = Array.isArray(data.members) ? data.members : [];
+    if (members.length < 2) {
+      throw new Error('Комиссия по проверке знаний должна состоять не менее чем из 3 человек, включая председателя (члены комиссии: минимум 2).');
+    }
+    for (const m of members) {
+      if (!normalizeText(m.position) || !normalizeText(m.last_name)) {
+        throw new Error('Для каждого члена комиссии укажите должность и фамилию.');
+      }
+    }
+    const all0 = this.getTrainingProtocolsRaw();
+    const dup = all0.find(
+      p => p.status === 'active' && p.legal_entity_id === data.legal_entity_id && p.protocol_number === protocolNumber && p.employee_id === data.employee_id
+    );
+    if (dup) throw new Error(`Протокол № «${protocolNumber}» для данного работника уже существует в этом юридическом лице.`);
+
+    // Авторасчёт срока следующей проверки знаний, если дата не указана явно
+    let nextCheck = data.next_check_date || null;
+    if (data.result === 'passed' && !nextCheck) {
+      nextCheck = StorageService.computeNextCheckDate(data.session_date, program.recurring_months);
+    }
+    if (data.result === 'failed') {
+      nextCheck = null;
+      if (data.issues_certificate) {
+        throw new Error('При неудовлетворительном результате удостоверение не выдается (п. 33 Порядка 2464).');
+      }
+    }
+    if (data.result === 'passed' && program.category === 'program_a' && !chairperson.trained_in_commission_program && members.some(m => !m.trained_in_commission_program)) {
+      // п. 27: члены комиссии должны иметь обучение по программе А — предупреждение не блокирует, см. аудит
+    }
+
+    const now = nowISO();
+    const item: TrainingProtocolItem = {
+      id: generateUUID(),
+      protocol_number: protocolNumber,
+      legal_entity_id: data.legal_entity_id,
+      training_program_id: data.training_program_id,
+      session_date: data.session_date,
+      chairperson,
+      members,
+      employee_id: data.employee_id,
+      result: data.result,
+      issues_certificate: data.result === 'passed' ? !!data.issues_certificate : false,
+      certificate_number: data.result === 'passed' ? normalizeText(data.certificate_number) : null,
+      registry_entry_number: normalizeText(data.registry_entry_number),
+      next_check_date: nextCheck,
+      invalidation_reason: null,
+      notes: normalizeText(data.notes),
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    };
+    all0.push(item);
+    this.saveTrainingProtocolsRaw(all0);
+
+    // Закрытие активного назначения на обучение при успешном результате
+    if (data.result === 'passed') {
+      const assignments = this.getTrainingAssignmentsRaw();
+      let changed = false;
+      for (const a of assignments) {
+        if (a.status === 'active' && a.employee_id === data.employee_id && a.training_program_id === data.training_program_id && !a.completed_protocol_id) {
+          a.completed_protocol_id = item.id;
+          a.updated_at = now;
+          changed = true;
+          break;
+        }
+      }
+      if (changed) this.saveTrainingAssignmentsRaw(assignments);
+    }
+
+    this.addAudit('training_protocol', item.id, 'training_protocol_create' as any, null, { ...item }, `Регистрация протокола проверки знаний № «${item.protocol_number}» (${data.result === 'passed' ? 'сдан' : 'несдан'})`);
+    return item;
+  }
+
+  public invalidateTrainingProtocol(id: string, reason: string): TrainingProtocolItem {
+    this.ensureTrainingModule();
+    const all = this.getTrainingProtocolsRaw();
+    const index = all.findIndex(p => p.id === id);
+    if (index === -1) throw new Error('Протокол проверки знаний не найден.');
+    const existing = all[index];
+    if (existing.status === 'archived') throw new Error('Протокол уже аннулирован (в архиве).');
+    const reasonText = normalizeText(reason);
+    if (!reasonText) throw new Error('Укажите причину аннулирования результата проверки знаний (п. 35 Порядка 2464).');
+    const before = { ...existing };
+    existing.status = 'archived';
+    existing.invalidation_reason = reasonText;
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveTrainingProtocolsRaw(all);
+    this.addAudit('training_protocol', id, 'training_protocol_invalidate' as any, before, { ...existing }, `Аннулирование протокола № «${existing.protocol_number}»: ${reasonText}`);
+    return existing;
+  }
+
+  public archiveTrainingProtocol(id: string): TrainingProtocolItem {
+    this.ensureTrainingModule();
+    const all = this.getTrainingProtocolsRaw();
+    const index = all.findIndex(p => p.id === id);
+    if (index === -1) throw new Error('Протокол проверки знаний не найден.');
+    const existing = all[index];
+    if (existing.status === 'archived') throw new Error('Протокол проверки знаний уже в архиве.');
+    const before = { ...existing };
+    existing.status = 'archived';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveTrainingProtocolsRaw(all);
+    this.addAudit('training_protocol', id, 'training_protocol_archive' as any, before, { ...existing }, `Архивирование протокола проверки знаний № «${existing.protocol_number}»`);
+    return existing;
+  }
+
+  public restoreTrainingProtocol(id: string): TrainingProtocolItem {
+    this.ensureTrainingModule();
+    const all = this.getTrainingProtocolsRaw();
+    const index = all.findIndex(p => p.id === id);
+    if (index === -1) throw new Error('Протокол проверки знаний не найден.');
+    const existing = all[index];
+    if (existing.status === 'active') throw new Error('Протокол проверки знаний уже активен.');
+    const before = { ...existing };
+    existing.status = 'active';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveTrainingProtocolsRaw(all);
+    this.addAudit('training_protocol', id, 'training_protocol_restore' as any, before, { ...existing }, `Восстановление протокола проверки знаний № «${existing.protocol_number}»`);
+    return existing;
+  }
+
+  public restoreTrainingAssignment(id: string): TrainingAssignment {
+    this.ensureTrainingModule();
+    const all = this.getTrainingAssignmentsRaw();
+    const index = all.findIndex(a => a.id === id);
+    if (index === -1) throw new Error('Назначение на обучение не найдено.');
+    const existing = all[index];
+    if (existing.status === 'active') throw new Error('Назначение на обучение уже активно.');
+    const before = { ...existing };
+    existing.status = 'active';
+    existing.updated_at = nowISO();
+    all[index] = existing;
+    this.saveTrainingAssignmentsRaw(all);
+    this.addAudit('training_assignment', id, 'training_assignment_restore' as any, before, { ...existing }, 'Восстановление назначения на обучение');
+    return existing;
+  }
+
+  // Сводный контроль сроков переаттестации по активным протоколам (сданным)
+  public static checkTrainingOverdue(protocols: TrainingProtocolItem[]): {
+    overdue: TrainingProtocolItem[];
+    upcoming: TrainingProtocolItem[];
+  } {
+    const today = nowISO().slice(0, 10);
+    const in30days = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    const overdue: TrainingProtocolItem[] = [];
+    const upcoming: TrainingProtocolItem[] = [];
+    for (const p of protocols) {
+      if (p.status === 'active' && p.result === 'passed' && p.next_check_date) {
+        if (p.next_check_date < today) overdue.push(p);
+        else if (p.next_check_date <= in30days) upcoming.push(p);
+      }
+    }
+    return { overdue, upcoming };
+  }
+
   // --- Backup & Restore ---
   public createBackup(label?: string): string {
     const manifest = {
@@ -3724,6 +4346,9 @@ class StorageService {
         ppe_norms: this.getPpeNormsRaw().length,
         ppe_cards: this.getPpeCardsRaw().length,
         ppe_issuances: this.getPpeIssuancesRaw().length,
+        training_programs: this.getTrainingProgramsRaw().length,
+        training_assignments: this.getTrainingAssignmentsRaw().length,
+        training_protocols: this.getTrainingProtocolsRaw().length,
         audit_logs: this.getAuditLogs().length,
       },
       data: {
@@ -3742,6 +4367,9 @@ class StorageService {
         ppe_norms: this.getPpeNormsRaw(),
         ppe_cards: this.getPpeCardsRaw(),
         ppe_issuances: this.getPpeIssuancesRaw(),
+        training_programs: this.getTrainingProgramsRaw(),
+        training_assignments: this.getTrainingAssignmentsRaw(),
+        training_protocols: this.getTrainingProtocolsRaw(),
         audit_logs: this.getAuditLogs(),
       },
     };
@@ -3829,6 +4457,15 @@ class StorageService {
     if (Array.isArray(parsed.data.ppe_issuances)) {
       saveToStorage(STORAGE_KEYS.PPE_ISSUANCES, parsed.data.ppe_issuances);
     }
+    if (Array.isArray(parsed.data.training_programs)) {
+      saveToStorage(STORAGE_KEYS.TRAINING_PROGRAMS, parsed.data.training_programs);
+    }
+    if (Array.isArray(parsed.data.training_assignments)) {
+      saveToStorage(STORAGE_KEYS.TRAINING_ASSIGNMENTS, parsed.data.training_assignments);
+    }
+    if (Array.isArray(parsed.data.training_protocols)) {
+      saveToStorage(STORAGE_KEYS.TRAINING_PROTOCOLS, parsed.data.training_protocols);
+    }
     if (Array.isArray(parsed.data.audit_logs)) {
       this.saveAuditLogsRaw(parsed.data.audit_logs);
     }
@@ -3870,6 +4507,9 @@ class StorageService {
     const ppeNorms = this.getPpeNormsRaw();
     const ppeCards = this.getPpeCardsRaw();
     const ppeIssuances = this.getPpeIssuancesRaw();
+    const trainingPrograms = this.getTrainingProgramsRaw();
+    const trainingAssignments = this.getTrainingAssignmentsRaw();
+    const trainingProtocols = this.getTrainingProtocolsRaw();
     const logs = this.getAuditLogs();
 
     const errors: string[] = [];
@@ -4196,6 +4836,94 @@ class StorageService {
       }
     }
 
+    // 16. Программы обучения verification (Stage 10, module 'training', Постановление 2464)
+    const trainingProgramMap = new Map(trainingPrograms.map(p => [p.id, p]));
+    for (const p of trainingPrograms) {
+      if (!p.legal_entity_id || !leMap.has(p.legal_entity_id)) {
+        errors.push(`Программа обучения (ID: ${p.id}) ссылается на несуществующее юридическое лицо (ID: ${p.legal_entity_id}).`);
+      }
+      if (!p.name) {
+        errors.push(`Программа обучения (ID: ${p.id}) имеет пустое наименование.`);
+      }
+      if (!TRAINING_PROGRAM_CATEGORY_LABELS_RU[p.category]) {
+        errors.push(`Программа обучения «${p.name}» (ID: ${p.id}) имеет недопустимую категорию (${p.category}).`);
+      }
+      if (p.hours <= 0) {
+        errors.push(`Программа обучения «${p.name}» (ID: ${p.id}) имеет неположительную трудоемкость (${p.hours} ч.).`);
+      }
+      if ((p.category === 'program_a' || p.category === 'program_b') && p.hours < 16) {
+        errors.push(`Программа «${p.name}» (ID: ${p.id}): трудоемкость программ А/Б не менее 16 часов по Постановлению 2464.`);
+      }
+      if ((p.category === 'first_aid' || p.category === 'ppe_use') && p.hours < 8) {
+        errors.push(`Программа «${p.name}» (ID: ${p.id}): обучение первой помощи и применению СИЗ — не менее 8 часов.`);
+      }
+    }
+
+    // 17. Назначения на обучение verification (Stage 10, module 'training')
+    for (const a of trainingAssignments) {
+      if (!a.legal_entity_id || !leMap.has(a.legal_entity_id)) {
+        errors.push(`Назначение на обучение (ID: ${a.id}) ссылается на несуществующее юридическое лицо.`);
+      }
+      const emp = empMap.get(a.employee_id);
+      if (!emp) {
+        errors.push(`Назначение на обучение (ID: ${a.id}) ссылается на несуществующего работника (ID: ${a.employee_id}).`);
+      } else if (a.legal_entity_id && emp.legal_entity_id !== a.legal_entity_id) {
+        errors.push(`Назначение на обучение (ID: ${a.id}): работник относится к другому юридическому лицу.`);
+      }
+      const prog = trainingProgramMap.get(a.training_program_id);
+      if (!prog) {
+        errors.push(`Назначение на обучение (ID: ${a.id}) ссылается на несуществующую программу обучения (ID: ${a.training_program_id}).`);
+      } else if (a.legal_entity_id && prog.legal_entity_id !== a.legal_entity_id) {
+        errors.push(`Назначение на обучение (ID: ${a.id}): программа обучения относится к другому юридическому лицу.`);
+      }
+      if (a.completed_protocol_id && !trainingProtocols.some(pr => pr.id === a.completed_protocol_id)) {
+        errors.push(`Назначение на обучение (ID: ${a.id}) ссылается на несуществующий протокол проверки знаний (ID: ${a.completed_protocol_id}).`);
+      }
+      if (a.planned_due_date && a.assignment_date && a.planned_due_date < a.assignment_date) {
+        errors.push(`Назначение на обучение (ID: ${a.id}): плановая дата прохождения раньше даты назначения.`);
+      }
+    }
+
+    // 18. Протоколы проверки знаний verification (Stage 10, module 'training')
+    for (const pr of trainingProtocols) {
+      if (!pr.protocol_number) {
+        errors.push(`Протокол проверки знаний (ID: ${pr.id}) имеет пустой номер.`);
+      }
+      if (!pr.legal_entity_id || !leMap.has(pr.legal_entity_id)) {
+        errors.push(`Протокол № «${pr.protocol_number}» (ID: ${pr.id}) ссылается на несуществующее юридическое лицо.`);
+      }
+      const emp = empMap.get(pr.employee_id);
+      if (!emp) {
+        errors.push(`Протокол № «${pr.protocol_number}» (ID: ${pr.id}) ссылается на несуществующего работника.`);
+      } else if (pr.legal_entity_id && emp.legal_entity_id !== pr.legal_entity_id) {
+        errors.push(`Протокол № «${pr.protocol_number}» (ID: ${pr.id}): работник относится к другому юридическому лицу.`);
+      }
+      const prog = trainingProgramMap.get(pr.training_program_id);
+      if (!prog) {
+        errors.push(`Протокол № «${pr.protocol_number}» (ID: ${pr.id}) ссылается на несуществующую программу обучения.`);
+      } else if (pr.legal_entity_id && prog.legal_entity_id !== pr.legal_entity_id) {
+        errors.push(`Протокол № «${pr.protocol_number}» (ID: ${pr.id}): программа обучения относится к другому юридическому лицу.`);
+      }
+      if (!pr.chairperson || !pr.chairperson.last_name) {
+        errors.push(`Протокол № «${pr.protocol_number}» (ID: ${pr.id}) не содержит председателя комиссии.`);
+      }
+      if (!Array.isArray(pr.members) || pr.members.length < 2) {
+        errors.push(`Протокол № «${pr.protocol_number}» (ID: ${pr.id}): комиссия должна включать не менее 3 человек (председатель + минимум 2 члена).`);
+      }
+      if (pr.result !== 'passed' && pr.result !== 'failed') {
+        errors.push(`Протокол № «${pr.protocol_number}» (ID: ${pr.id}) имеет недопустимый результат проверки знаний.`);
+      }
+      if (pr.result === 'failed' && pr.next_check_date) {
+        errors.push(`Протокол № «${pr.protocol_number}» (ID: ${pr.id}): при неудовлетворительном результате не должен быть указан срок следующей проверки.`);
+      }
+      if (pr.result === 'passed' && pr.next_check_date && pr.session_date && pr.next_check_date < pr.session_date) {
+        errors.push(`Протокол № «${pr.protocol_number}» (ID: ${pr.id}): срок следующей проверки раньше даты заседания комиссии.`);
+      }
+      if (pr.status === 'active' && pr.result === 'passed' && pr.next_check_date && pr.next_check_date < today) {
+        warnings.push(`Срок следующей проверки знаний по протоколу № «${pr.protocol_number}» (работник ID: ${pr.employee_id}) просрочен (${pr.next_check_date}).`);
+      }
+    }
+
     return {
       valid: errors.length === 0,
       timestamp: nowISO(),
@@ -4217,6 +4945,9 @@ class StorageService {
         ppe_norms: ppeNorms.length,
         ppe_cards: ppeCards.length,
         ppe_issuances: ppeIssuances.length,
+        training_programs: trainingPrograms.length,
+        training_assignments: trainingAssignments.length,
+        training_protocols: trainingProtocols.length,
         audit_logs: logs.length,
       },
     };

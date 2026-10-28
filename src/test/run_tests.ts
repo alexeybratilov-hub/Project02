@@ -1960,5 +1960,329 @@ assert.equal(storage.isModuleEnabled('ppe'), true);
 
 console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–9 УСПЕШНО ПРОЙДЕНЫ (27/27)!');
 
+// ==================== ЭТАП 10: ОБУЧЕНИЕ ПО ОХРАНЕ ТРУДА И ПРОВЕРКА ЗНАНИЙ (ПОСТАНОВЛЕНИЕ РФ № 2464) ====================
+
+import {
+  mapTrainingProgramsHeaders,
+  mapTrainingProtocolsHeaders,
+  generateTrainingProgramsPreview,
+  generateTrainingProtocolsPreview,
+  TRAINING_PROGRAMS_HEADERS,
+  TRAINING_PROTOCOLS_HEADERS,
+} from '../services/excel';
+import { TRAINING_PROGRAM_CATEGORY_LABELS_RU } from '../types';
+
+console.log('[28/30] Тестирование программ обучения (Постановление 2464): CRUD, минимальная трудоемкость А/Б и первой помощи, авторасчёт периодичности...');
+
+// Enable training module for tests (default state is disabled)
+setModuleState('training', true);
+assert.equal(storage.isModuleEnabled('training'), true);
+
+// Category labels dictionary is complete
+assert.ok(TRAINING_PROGRAM_CATEGORY_LABELS_RU.program_a.includes('Программа А'));
+assert.equal(typeof TRAINING_PROGRAM_CATEGORY_LABELS_RU.first_aid, 'string');
+
+// Program A with less than 16 hours is rejected (Постановление 2464)
+assert.throws(
+  () => storage.createTrainingProgram({ legal_entity_id: testLe.id, name: 'Программа А (неполная)', category: 'program_a', hours: 10 }),
+  /не менее 16 часов/
+);
+// First aid with less than 8 hours is rejected
+assert.throws(
+  () => storage.createTrainingProgram({ legal_entity_id: testLe.id, name: 'Первая помощь (неполная)', category: 'first_aid', hours: 4 }),
+  /не менее 8 часов/
+);
+// Invalid category is rejected
+assert.throws(
+  () => storage.createTrainingProgram({ legal_entity_id: testLe.id, name: 'Тест', category: 'program_x' as any, hours: 16 }),
+  /Недопустимая категория/
+);
+// Missing LE is rejected
+assert.throws(
+  () => storage.createTrainingProgram({ legal_entity_id: 'missing-le', name: 'Тест', category: 'program_b', hours: 16 }),
+  /Юридическое лицо не найдено/
+);
+
+// Valid programs
+const progA = storage.createTrainingProgram({
+  legal_entity_id: testLe.id,
+  name: 'Общие вопросы охраны труда и функционирование СУОТ',
+  category: 'program_a',
+  hours: 16,
+  positions: 'Специалист по охране труда',
+  basis: 'Постановление Правительства РФ № 2464',
+});
+assert.equal(progA.status, 'active');
+assert.equal(progA.hours, 16);
+// Auto-periodicity for program A: 36 months (once every 3 years)
+assert.equal(progA.recurring_months, 36);
+
+const progFirstAid = storage.createTrainingProgram({
+  legal_entity_id: testLe.id,
+  name: 'Обучение оказанию первой помощи пострадавшим',
+  category: 'first_aid',
+  hours: 8,
+});
+assert.equal(progFirstAid.recurring_months, 36); // default periodicity from TRAINING_DEFAULT_RECURRING_MONTHS
+
+const progB = storage.createTrainingProgram({
+  legal_entity_id: testLe.id,
+  name: 'Безопасные методы и приемы выполнения работ (программа Б)',
+  category: 'program_b',
+  hours: 16,
+  recurring_months: 12,
+});
+assert.equal(progB.recurring_months, 12);
+
+// Update validation: cannot downgrade program A below 16 hours
+assert.throws(() => storage.updateTrainingProgram(progA.id, { hours: 12 }), /не менее 16 часов/);
+const progAUpd = storage.updateTrainingProgram(progA.id, { hours: 20 });
+assert.equal(progAUpd.hours, 20);
+
+// Listing and search
+const progList = storage.listTrainingPrograms({ legal_entity_id: testLe.id, pageSize: 100 });
+assert.ok(progList.total >= 3);
+const progSearch = storage.listTrainingPrograms({ search: 'СУОТ', legal_entity_id: testLe.id });
+assert.ok(progSearch.items.some(p => p.id === progA.id));
+const progByCat = storage.listTrainingPrograms({ category: 'first_aid', legal_entity_id: testLe.id });
+assert.ok(progByCat.items.every(p => p.category === 'first_aid'));
+
+// Training validity computation (valid / expiring / overdue / none)
+assert.equal(StorageService.checkTrainingValidity(null), 'none');
+assert.equal(StorageService.checkTrainingValidity('2020-01-01'), 'overdue');
+const soonDate = new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10);
+assert.equal(StorageService.checkTrainingValidity(soonDate), 'expiring');
+const farDate = new Date(Date.now() + 200 * 86400000).toISOString().slice(0, 10);
+assert.equal(StorageService.checkTrainingValidity(farDate), 'valid');
+
+// computeNextCheckDate: session date + recurring months; 0/null -> no scheduled check
+assert.equal(StorageService.computeNextCheckDate('2025-01-31', 36), '2028-01-31');
+assert.equal(StorageService.computeNextCheckDate('2025-06-15', null), null);
+
+console.log('[29/30] Тестирование назначений и протоколов проверки знаний (комиссия, п. 27/33/35 Порядка 2464)...');
+
+// Assignment creation with FK validation
+assert.throws(
+  () => storage.createTrainingAssignment({ legal_entity_id: testLe.id, employee_id: testEmp.employee.id, training_program_id: 'no-such-program', assignment_date: '2025-01-10' }),
+  /Программа обучения не найдена/
+);
+assert.throws(
+  () => storage.createTrainingAssignment({ legal_entity_id: testLe.id, employee_id: testEmp.employee.id, training_program_id: progA.id, assignment_date: '10.01.2025' }),
+  /корректную дату назначения/
+);
+const assign1 = storage.createTrainingAssignment({
+  legal_entity_id: testLe.id,
+  employee_id: testEmp.employee.id,
+  training_program_id: progA.id,
+  assignment_date: '2025-01-10',
+  planned_due_date: '2025-02-10',
+});
+assert.equal(assign1.status, 'active');
+assert.equal(assign1.completed_protocol_id, null);
+assert.throws(
+  () => storage.createTrainingAssignment({ legal_entity_id: testLe.id, employee_id: testEmp.employee.id, training_program_id: progA.id, assignment_date: '2025-01-10', planned_due_date: '2024-01-01' }),
+  /раньше даты назначения/
+);
+
+const chair = { position: 'Главный инженер ООО «САОТ-Тест»', last_name: 'Иванов', first_name: 'И. И.', trained_in_commission_program: true };
+const members2 = [
+  { position: 'Специалист по ОТ ООО «САОТ-Тест»', last_name: 'Петрова', first_name: 'П. П.', trained_in_commission_program: true },
+  { position: 'Руководитель подразделения ООО «САОТ-Тест»', last_name: 'Смирнов', first_name: 'С. С.', trained_in_commission_program: true },
+];
+
+// Commission must have at least 3 people incl. chairperson (п. 27)
+assert.throws(
+  () => storage.createTrainingProtocol({
+    protocol_number: 'П-001', legal_entity_id: testLe.id, training_program_id: progA.id,
+    session_date: '2025-01-20', chairperson: chair, members: [members2[0]],
+    employee_id: testEmp.employee.id, result: 'passed',
+  }),
+  /не менее чем из 3 человек/
+);
+// Chairperson is mandatory
+assert.throws(
+  () => storage.createTrainingProtocol({
+    protocol_number: 'П-001', legal_entity_id: testLe.id, training_program_id: progA.id,
+    session_date: '2025-01-20', chairperson: { position: '', last_name: '' } as any, members: members2,
+    employee_id: testEmp.employee.id, result: 'passed',
+  }),
+  /председателя комиссии/
+);
+// Session date in the future is rejected
+assert.throws(
+  () => storage.createTrainingProtocol({
+    protocol_number: 'П-001', legal_entity_id: testLe.id, training_program_id: progA.id,
+    session_date: '2099-01-01', chairperson: chair, members: members2,
+    employee_id: testEmp.employee.id, result: 'passed',
+  }),
+  /не может быть в будущем/
+);
+// Failed result cannot issue certificate (п. 33)
+assert.throws(
+  () => storage.createTrainingProtocol({
+    protocol_number: 'П-002', legal_entity_id: testLe.id, training_program_id: progA.id,
+    session_date: '2025-01-20', chairperson: chair, members: members2,
+    employee_id: testEmp.employee.id, result: 'failed', issues_certificate: true,
+  }),
+  /удостоверение не выдается/
+);
+
+// Successful protocol: auto next_check_date = session_date + recurring_months (36)
+const proto1 = storage.createTrainingProtocol({
+  protocol_number: 'П-001', legal_entity_id: testLe.id, training_program_id: progA.id,
+  session_date: '2025-01-20', chairperson: chair, members: members2,
+  employee_id: testEmp.employee.id, result: 'passed', issues_certificate: true,
+  certificate_number: 'УД-001234', registry_entry_number: '770123456789',
+});
+assert.equal(proto1.next_check_date, '2028-01-20');
+assert.equal(proto1.result, 'passed');
+assert.equal(proto1.issues_certificate, true);
+
+// Duplicate protocol number for same employee in same LE is blocked
+assert.throws(
+  () => storage.createTrainingProtocol({
+    protocol_number: 'п-001', legal_entity_id: testLe.id, training_program_id: progA.id,
+    session_date: '2025-01-20', chairperson: chair, members: members2,
+    employee_id: testEmp.employee.id, result: 'passed',
+  }),
+  /уже существует/
+);
+
+// Protocol creation closes the active assignment
+const assignAfter = storage.getTrainingAssignmentById(assign1.id);
+assert.equal(assignAfter?.completed_protocol_id, proto1.id);
+
+// Failed protocol: no certificate, no next check date
+const protoFail = storage.createTrainingProtocol({
+  protocol_number: 'П-002', legal_entity_id: testLe.id, training_program_id: progB.id,
+  session_date: '2025-02-10', chairperson: chair, members: members2,
+  employee_id: testEmp2.employee.id, result: 'failed', notes: 'Несдача, повторная проверка в течение месяца',
+});
+assert.equal(protoFail.next_check_date, null);
+assert.equal(protoFail.issues_certificate, false);
+assert.equal(protoFail.certificate_number, null);
+
+// Filtering by validity and result
+const overdueProto = storage.createTrainingProtocol({
+  protocol_number: 'П-003', legal_entity_id: testLe.id, training_program_id: progA.id,
+  session_date: '2021-01-20', chairperson: chair, members: members2,
+  employee_id: testEmp2.employee.id, result: 'passed',
+});
+assert.equal(StorageService.checkTrainingValidity(overdueProto.next_check_date), 'overdue');
+const overdueTrainList = storage.listTrainingProtocols({ legal_entity_id: testLe.id, validity: 'overdue' });
+assert.ok(overdueTrainList.items.some(p => p.id === overdueProto.id));
+const failedList = storage.listTrainingProtocols({ legal_entity_id: testLe.id, result: 'failed' });
+assert.ok(failedList.items.some(p => p.id === protoFail.id));
+
+// Invalidation requires reason (п. 35)
+assert.throws(() => storage.invalidateTrainingProtocol(protoFail.id, ''), /причину аннулирования/);
+const invalidated = storage.invalidateTrainingProtocol(protoFail.id, 'Ошибка в составе комиссии');
+assert.equal(invalidated.status, 'archived');
+assert.equal(invalidated.invalidation_reason, 'Ошибка в составе комиссии');
+assert.equal(storage.listTrainingProtocols({ legal_entity_id: testLe.id, result: 'failed' }).items.some(p => p.id === protoFail.id), false);
+storage.restoreTrainingProtocol(protoFail.id);
+assert.equal(storage.getTrainingProtocolById(protoFail.id)?.status, 'active');
+
+// Cannot archive a program with active protocols/assignments
+assert.throws(() => storage.archiveTrainingProgram(progA.id), /есть активные протоколы/);
+
+console.log('[30/30] Тестирование импорта/экспорта обучения, целостности (шаги 16–18), переключения модуля и бэкапа (Этап 10)...');
+
+// Header mapping: programs & protocols (Russian aliases -> keys)
+const tpMap = mapTrainingProgramsHeaders(['Организация', 'Наименование программы', 'Категория программы', 'Трудоемкость (часы)', 'Периодичность (мес.)', 'Должности / профессии', 'Основание разработки']);
+assert.ok(Object.values(tpMap).includes('legal_entity'));
+assert.ok(Object.values(tpMap).includes('name'));
+assert.ok(Object.values(tpMap).includes('category'));
+assert.ok(Object.values(tpMap).includes('hours'));
+assert.ok(Object.values(tpMap).includes('recurring_months'));
+assert.equal(TRAINING_PROGRAMS_HEADERS.length, 7);
+
+const trMap = mapTrainingProtocolsHeaders(['Номер протокола', 'Дата заседания комиссии', 'Программа (наименование или категория)', 'ФИО работника', 'СНИЛС', 'Результат (удовлетворительно/неудовлетворительно)', 'Председатель ФИО', 'Председатель должность', 'Член комиссии 1 ФИО', 'Член комиссии 1 должность']);
+assert.ok(Object.values(trMap).includes('protocol_number'));
+assert.ok(Object.values(trMap).includes('session_date'));
+assert.ok(Object.values(trMap).includes('result'));
+assert.ok(Object.values(trMap).includes('chairperson_fio'));
+assert.equal(TRAINING_PROTOCOLS_HEADERS.length, 14);
+
+// Programs import preview: add / reject (<16h) / reject (unknown LE) / skip (duplicate name)
+const tpPreview = generateTrainingProgramsPreview(
+  [
+    { legal_entity: testLe.inn, name: 'Инструктаж по безопасному содержанию территорий', category: 'Программа Б', hours: 16 },
+    { legal_entity: testLe.inn, name: 'Программа А короткая', category: 'Программа А', hours: 8 },
+    { legal_entity: 'ООО «Нет такой организации»', name: 'Тест', category: 'Программа А', hours: 16 },
+    { legal_entity: testLe.short_name || '', name: 'Обучение оказанию первой помощи пострадавшим', category: 'первая помощь', hours: 8 },
+  ],
+  storage.listLegalEntities({ pageSize: 1000 }).items,
+  storage.getTrainingProgramsRaw(),
+  'add'
+);
+assert.equal(tpPreview.summary.total, 4);
+assert.equal(tpPreview.results[0].action, 'add');
+assert.equal(tpPreview.results[0].data.category, 'program_b');
+assert.equal(tpPreview.results[1].action, 'reject');
+assert.ok(tpPreview.results[1].errors.some(e => e.includes('не менее 16 часов')));
+assert.equal(tpPreview.results[2].action, 'reject');
+assert.ok(tpPreview.results[2].errors.some(e => e.includes('не найдено в базе')));
+assert.equal(tpPreview.results[3].action, 'skip');
+assert.ok(tpPreview.results[3].warnings.some(w => w.includes('уже существует')));
+
+// Protocols import preview: add with commission parsing / reject unknown program
+const trPreview = generateTrainingProtocolsPreview(
+  [
+    {
+      legal_entity: testLe.inn, protocol_number: 'П-100', session_date: '2025-03-01',
+      program: progB.name, fio: 'Кузнецов Алексей Сергеевич', result: 'удовлетворительно',
+      chairperson_fio: 'Иванов И И', chairperson_position: 'Главный инженер',
+      member1_fio: 'Петрова П П', member1_position: 'Специалист по ОТ',
+    },
+    {
+      legal_entity: testLe.inn, protocol_number: 'П-101', session_date: '2025-03-01',
+      program: 'Несуществующая программа', fio: 'Кузнецов Алексей Сергеевич', result: 'неудовлетворительно',
+      chairperson_fio: 'Иванов И И', chairperson_position: 'Главный инженер',
+      member1_fio: 'Петрова П П', member1_position: 'Специалист по ОТ',
+    },
+  ],
+  storage.listLegalEntities({ pageSize: 1000 }).items,
+  storage.getEmployeesRaw(),
+  storage.getTrainingProgramsRaw(),
+  storage.getTrainingProtocolsRaw(),
+  'add'
+);
+assert.equal(trPreview.results[0].action, 'add');
+assert.equal(trPreview.results[0].data.result, 'passed');
+assert.ok(trPreview.results[0].warnings.some(w => w.includes('менее 3 человек')));
+assert.equal(trPreview.results[1].action, 'reject');
+assert.ok(trPreview.results[1].errors.some(e => e.includes('не найдена в организации')));
+
+// Module toggle: data preserved while module disabled, integrity still valid
+setModuleState('training', false);
+assert.equal(storage.isModuleEnabled('training'), false);
+assert.throws(() => storage.createTrainingProgram({ legal_entity_id: testLe.id, name: 'Тест блокировки', category: 'program_a', hours: 16 }), /отключён/);
+assert.equal(storage.getTrainingProgramsRaw().some(p => p.id === progA.id), true);
+assert.equal(storage.getTrainingProtocolsRaw().some(p => p.id === proto1.id), true);
+setModuleState('training', true);
+assert.equal(storage.isModuleEnabled('training'), true);
+
+// Backup manifest includes training counts; restore round-trip preserves training data
+const backupStage10 = JSON.parse(storage.createBackup('test-stage10'));
+assert.ok(backupStage10.counts.training_programs >= 3);
+assert.ok(backupStage10.counts.training_assignments >= 1);
+assert.ok(backupStage10.counts.training_protocols >= 3);
+assert.ok(Array.isArray(backupStage10.data.training_programs) && backupStage10.data.training_programs.length >= 3);
+assert.ok(Array.isArray(backupStage10.data.training_protocols) && backupStage10.data.training_protocols.length >= 3);
+
+storage.createTrainingProgram({ legal_entity_id: testLe.id, name: 'ПРОГРАММА-TEMP', category: 'program_b', hours: 16 });
+assert.ok(storage.getTrainingProgramsRaw().some(p => p.name === 'ПРОГРАММА-TEMP'));
+const restoreReport10 = storage.restoreFromBackup(JSON.stringify(backupStage10));
+assert.equal(restoreReport10.valid, true);
+assert.equal(storage.getTrainingProgramsRaw().some(p => p.name === 'ПРОГРАММА-TEMP'), false);
+assert.ok(storage.getTrainingProgramsRaw().some(p => p.id === progA.id));
+assert.ok(storage.getTrainingProtocolsRaw().some(p => p.id === proto1.id));
+assert.ok(storage.getTrainingAssignmentsRaw().some(a => a.id === assign1.id));
+assert.equal(storage.verifyDataIntegrity().valid, true);
+assert.equal(storage.isModuleEnabled('training'), true);
+
+console.log('✅ ВСЕ ТЕСТЫ ЭТАПОВ 2–10 УСПЕШНО ПРОЙДЕНЫ (30/30)!');
+
 
 
