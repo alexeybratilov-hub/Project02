@@ -107,11 +107,27 @@
 | Сервисы | `storage.ts` (`computeNextPpeDueDate`, `checkPpeOverdue`, CRUD с аудитом и изоляцией), `excel.ts` (`exportPpeNormsToXLSX/CSV`, `exportPpeCardsToXLSX/CSV`, `downloadPpeNormsTemplate`, `downloadPpeCardsTemplate`, `mapPpeNormsHeaders`, `generatePpeNormsPreview`, `mapPpeCardsHeaders`, `generatePpeCardsPreview`) |
 | Тесты | тесты 25–27 в `src/test/run_tests.ts` (нормы ЕТН, личные карточки, антропометрия, вычисление сроков носки, списание по причинам, детекция просрочки, маппинг импорта, ссылочная целостность шаги 13–15, toggle модуля, бэкап round-trip) |
 
+### 2.8. Обучение по охране труда и проверка знаний (Подэтап 6.5)
+
+| Параметр | Значение |
+|---|---|
+| ID модуля | `training` |
+| Название | Обучение по охране труда и проверка знаний |
+| Законодательная база | Постановление Правительства РФ от 24.12.2021 № 2464 «О порядке обучения по охране труда и проверки знания требований охраны труда» (Порядок 2464), ст. 214, 218 ТК РФ |
+| Зависимости ядра | `legal_entities`, `departments`, `positions`, `employees`, `contingent` |
+| Опциональные связи | `ppe` (программа применения СИЗ), `sout` (ВОРПФ для Программы Б) |
+| Статус | **Реализован и верифицирован** (Подэтап 6.5, релиз 1.5.0-stage6.5) |
+| Сущности данных | `TrainingProgram` (программы А/Б/В, первая помощь, СИЗ, инструктажи; трудоемкость, периодичность), `TrainingAssignment` (назначения на обучение/план), `TrainingProtocolItem` (протоколы заседания комиссии: председатель, состав ≥3 чел., результат, удостоверение, номер ЕИСОТ, next_check_date, аннулирование) |
+| Хранилище (storage keys) | `saot_training_programs`, `saot_training_assignments`, `saot_training_protocols` |
+| Компоненты UI | `TrainingList.tsx` (вкладки программ/назначений/протоколов, KPI, фильтры просрочки), `TrainingProgramForm.tsx`, `TrainingProtocolForm.tsx` (состав комиссии), `TrainingProtocolView.tsx` (протокол, выписка/удостоверение, данные ЕИСОТ), `TrainingImport.tsx` (мастер импорта программ/протоколов) |
+| Сервисы | `storage.ts` (CRUD с аудитом и изоляцией, авторасчёт `next_check_date`, статусы `valid/expiring/overdue/none`, `invalidateTrainingProtocol`), `excel.ts` (`exportTrainingProgramsToXLSX/CSV`, `downloadTrainingProgramsTemplate`, `mapTrainingProgramsHeaders`, `generateTrainingProgramsPreview`, `exportTrainingProtocolsToXLSX/CSV`, `downloadTrainingProtocolsTemplate`, `mapTrainingProtocolsHeaders`, `generateTrainingProtocolsPreview`, `resolveTrainingCategory`) |
+| Тесты | тесты 28–30 в `src/test/run_tests.ts` (программы и минимальная трудоемкость, авторасчёт периодичности, назначения, протоколы и состав комиссии п. 27/33/35, импорт/экспорт, целостность шаги 16–18, toggle модуля, бэкап) |
+
 ## 3. Будущие модули
 
 | Модуль | Статус | Зависимости | Примечание |
 |---|---|---|---|
-| Обучение и проверка знаний | запланирован (кандидат Подэтапа 6.5) | работники, контингент | программы (Постановление Правительства РФ № 2464), протоколы проверки знаний, удостоверения, реестр Минтруда |
+| Обучение и проверка знаний | **реализован (Подэтап 6.5, 2026-10-30)** | работники, контингент | см. §2.8: программы (Постановление Правительства РФ № 2464), протоколы проверки знаний, удостоверения, реестр Минтруда |
 | Документы и ознакомление | вне v1 | работники | версии документов, электронные росписи |
 | Проверки и нарушения | вне v1 | юридические лица | предписания ГИТ, устранение нарушений |
 | Несчастные случаи и происшествия | вне v1 | работники, юрлица | формы Н-1, расследования |
