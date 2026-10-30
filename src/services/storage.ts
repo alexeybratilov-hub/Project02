@@ -4177,7 +4177,7 @@ class StorageService {
     }
     const all0 = this.getTrainingProtocolsRaw();
     const dup = all0.find(
-      p => p.status === 'active' && p.legal_entity_id === data.legal_entity_id && p.protocol_number === protocolNumber && p.employee_id === data.employee_id
+      p => p.status === 'active' && p.legal_entity_id === data.legal_entity_id && ciCompare(p.protocol_number) === ciCompare(protocolNumber) && p.employee_id === data.employee_id
     );
     if (dup) throw new Error(`Протокол № «${protocolNumber}» для данного работника уже существует в этом юридическом лице.`);
 

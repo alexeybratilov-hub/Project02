@@ -3243,8 +3243,17 @@ export function mapTrainingProgramsHeaders(headers: string[]): Record<string, st
   const mapping: Record<string, string> = {};
   for (const h of headers) {
     const clean = h.trim().toLowerCase().replace(/\s+/g, ' ');
+    // Exact alias match first
     if (TRAINING_PROGRAMS_ALIASES[clean]) {
       mapping[h] = TRAINING_PROGRAMS_ALIASES[clean];
+      continue;
+    }
+    // Parenthetical qualifier fallback: strip "(...)" from the header before lookup.
+    // This lets exported template headers like "Трудоемкость (часы)" / "Периодичность (мес.)"
+    // match when the exact form is not present in the alias table.
+    const stripped = clean.replace(/\s*\([^)]*\)\s*/g, '').trim();
+    if (stripped && stripped !== clean && TRAINING_PROGRAMS_ALIASES[stripped]) {
+      mapping[h] = TRAINING_PROGRAMS_ALIASES[stripped];
     }
   }
   return mapping;
@@ -3523,8 +3532,17 @@ export function mapTrainingProtocolsHeaders(headers: string[]): Record<string, s
   const mapping: Record<string, string> = {};
   for (const h of headers) {
     const clean = h.trim().toLowerCase().replace(/\s+/g, ' ');
+    // Exact alias match first
     if (TRAINING_PROTOCOLS_ALIASES[clean]) {
       mapping[h] = TRAINING_PROTOCOLS_ALIASES[clean];
+      continue;
+    }
+    // Parenthetical qualifier fallback: strip "(...)" segments from the header and retry.
+    // Handles exported template headers such as "Результат (удовлетворительно/неудовлетворительно)",
+    // "Программа (наименование или категория)", "Удостоверение выдано (Да/Нет)".
+    const stripped = clean.replace(/\s*\([^)]*\)\s*/g, '').trim();
+    if (stripped && stripped !== clean && TRAINING_PROTOCOLS_ALIASES[stripped]) {
+      mapping[h] = TRAINING_PROTOCOLS_ALIASES[stripped];
     }
   }
   return mapping;
@@ -3564,8 +3582,13 @@ export function generateTrainingProtocolsPreview(
     if (!sessionDate || !/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) {
       res.errors.push('Дата заседания комиссии должна быть в формате ГГГГ-ММ-ДД.');
     } else {
-      const dateErr = validateDateNotFuture(sessionDate, 'Дата заседания комиссии');
-      if (dateErr) res.errors.push(dateErr);
+      // validateDateNotFuture throws on invalid/future dates and returns the
+      // normalized date string on success — treat any throw as a row error.
+      try {
+        validateDateNotFuture(sessionDate, 'Дата заседания комиссии');
+      } catch (e: any) {
+        res.errors.push(e.message);
+      }
     }
     if (!programQuery) res.errors.push('Не указана программа обучения.');
     if (!fioQuery && !snilsQuery) res.errors.push('Не указан работник (ФИО или СНИЛС).');
@@ -3579,7 +3602,13 @@ export function generateTrainingProtocolsPreview(
     const chairWords = chairFio ? chairFio.split(/\s+/) : [];
     if (!chairFio) res.errors.push('Не указан председатель комиссии (ФИО).');
     if (!chairPosition) res.warnings.push('Не указана должность председателя комиссии.');
-    if (!member1Fio) res.warnings.push('Не указан член комиссии — по п. 27 Порядка № 2464 комиссия не менее 3 человек.');
+    if (!member1Fio) {
+      res.warnings.push('Не указан член комиссии — по п. 27 Порядка № 2464 комиссия не менее 3 человек.');
+    } else if (!normalizeText(row.member2_fio)) {
+      // Row provides only one commission member: with the chairperson this is
+      // 2 people total, still below the minimum of 3 per п. 27 Порядка № 2464.
+      res.warnings.push('В составе комиссии менее 3 человек — по п. 27 Порядка № 2464 комиссия должна состоять не менее чем из 3 человек.');
+    }
 
     const issuesCertRaw = normalizeText(row.issues_certificate);
     const issuesCertificate = ['да', 'true', '1', 'yes'].includes((issuesCertRaw || '').toLowerCase());
