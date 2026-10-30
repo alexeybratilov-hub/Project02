@@ -348,6 +348,18 @@
 | status | enum(`EntityStatus`) | да | active / archived (D-009) |
 | created_at / updated_at | datetime | да | |
 
+### 1.23. Программы обучения (`saot_training_programs`, Подэтап 6.5)
+
+Сущность `TrainingProgram` (Постановление Правительства РФ № 2464): `id`, `legal_entity_id`, `name`, `category` (`program_a` | `program_b` | `program_c` | `first_aid` | `ppe_use` | `intro_briefing` | `primary_briefing` | `repeated_briefing` | `unexpected_briefing` | `targeted_briefing`), `hours` (трудоемкость; валидация: Программа А — не менее 16 ч, первая помощь — не менее 8 ч), `recurring_months` (авторасчёт по справочнику `TRAINING_DEFAULT_RECURRING_MONTHS`: А/Б/ПП/СИЗ — 36 мес., В — 12 мес.), `positions`, `basis`, `status`, `created_at`, `updated_at`.
+
+### 1.24. Назначения на обучение (`saot_training_assignments`, Подэтап 6.5)
+
+Сущность `TrainingAssignment`: `id`, `legal_entity_id`, `employee_id`, `training_program_id`, `briefing_type` (для инструктажей), `assignment_date`, `planned_due_date`, `completed_protocol_id` (протокол, закрывающий назначение), `notes`, `status`, timestamps. Связи: работник и программа должны принадлежать одному юридическому лицу.
+
+### 1.25. Протоколы проверки знаний (`saot_training_protocols`, Подэтап 6.5)
+
+Сущность `TrainingProtocolItem`: `id`, `protocol_number` (номер протокола заседания комиссии), `legal_entity_id`, `training_program_id`, `session_date`, `chairperson` и `members` (`TrainingProtocolMember`: должность, ФИО, признак обучения по программе проверки знаний членов комиссий; состав не менее 3 человек — п. 27 Порядка 2464), `employee_id`, `result` (`passed` | `failed`), `issues_certificate` (запрет выдачи удостоверения при `failed` — п. 33), `certificate_number`, `registry_entry_number` (регистрационный номер в реестре обученных лиц Минтруда РФ — ЕИСОТ), `next_check_date` (авторасчёт: `session_date + recurring_months`), `invalidation_reason` (аннулирование — п. 35), `notes`, `status`, timestamps. Статусы действительности проверки знаний для реестра обученных: `valid` / `expiring` / `overdue` / `none` (`TrainingValidityStatus`).
+
 ## 2. Связи
 
 ```mermaid
